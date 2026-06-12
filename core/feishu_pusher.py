@@ -18,8 +18,8 @@ class FeishuPusher:
             print("  [飞书] 无新闻可推送")
             return
 
-        type_labels = {"pre_market": "📊 盘前必读", "intraday": "⚡ 盘中快讯", "post_market": "📈 盘后复盘"}
-        type_label = type_labels.get(report_type, "📰 新闻推送")
+        type_labels = {"pre_market": "盘前必读", "intraday": "盘中快讯", "post_market": "盘后复盘"}
+        type_label = type_labels.get(report_type, "新闻推送")
         now = datetime.now().strftime("%H:%M")
 
         items = []
@@ -46,7 +46,7 @@ class FeishuPusher:
                 {"tag": "hr"},
             ] + items + [
                 {"tag": "hr"},
-                {"tag": "note", "elements": [{"tag": "plain_text", "content": f"A股情报系统 · {now} · 投资有风险"}]},
+                {"tag": "note", "elements": [{"tag": "plain_text", "content": "A股情报系统"}]},
             ],
         }
 
@@ -64,8 +64,8 @@ class FeishuPusher:
     def push_report(self, report_type: str, title: str, content: str, web_url: str = ""):
         if not self.webhook_url:
             return
-        type_labels = {"pre_market": "📊 盘前必读", "intraday": "⚡ 盘中快讯", "post_market": "📈 盘后复盘"}
-        type_label = type_labels.get(report_type, "📰 报告")
+        type_labels = {"pre_market": "盘前必读", "intraday": "盘中快讯", "post_market": "盘后复盘"}
+        type_label = type_labels.get(report_type, "报告")
 
         content_preview = content[:500] if content else ""
         elements = [
@@ -85,12 +85,12 @@ class FeishuPusher:
         card = {
             "config": {"wide_screen_mode": True},
             "header": {
-                "title": {"tag": "plain_text", "content": f"{type_label} · {title}"},
+                "title": {"tag": "plain_text", "content": f"{type_label} - {title}"},
                 "template": "blue" if report_type == "pre_market" else ("indigo" if report_type == "post_market" else "green"),
             },
             "elements": elements + [
                 {"tag": "hr"},
-                {"tag": "note", "elements": [{"tag": "plain_text", "content": "A股情报系统 · 投资有风险"}]},
+                {"tag": "note", "elements": [{"tag": "plain_text", "content": "A股情报系统"}]},
             ],
         }
         payload = {"msg_type": "interactive", "card": card}

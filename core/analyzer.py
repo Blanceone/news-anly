@@ -79,12 +79,11 @@ class NewsAnalyzer:
     def summarize_news(self, news: list) -> str:
         if self.provider == "none":
             return self._generate_basic_summary(news)
-        categorized = self._categorize_news_items(news)
         text = "请对以下财经新闻进行分类汇总和分析，输出格式如下：\n\n"
-        text += "## 📊 市场概览\n(总结今日市场整体情绪和走势)\n\n"
-        text += "## 📰 重点新闻分析\n(按重要性排序，每条包含：标题、来源、核心要点、影响判断)\n\n"
-        text += "## 🎯 自选股相关\n(列出与自选股相关的新闻及影响分析)\n\n"
-        text += "## ⚠️ 风险提示\n(提示需要关注的潜在风险)\n\n"
+        text += "## 市场概览\n(总结今日市场整体情绪和走势)\n\n"
+        text += "## 重点新闻分析\n(按重要性排序，每条包含：标题、来源、核心要点、影响判断)\n\n"
+        text += "## 自选股相关\n(列出与自选股相关的新闻及影响分析)\n\n"
+        text += "## 风险提示\n(提示需要关注的潜在风险)\n\n"
         text += f"以下是今日新闻数据（共{len(news)}条）：\n\n"
         for i, item in enumerate(news[:50], 1):
             text += f"{i}. 【{item['source_name']}】{item['title']}\n   {item.get('content', '')[:200]}\n\n"
@@ -112,7 +111,7 @@ class NewsAnalyzer:
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         report = f"# 财经新闻简报 ({now})\n\n"
-        report += "> ⚠️ 当前未配置 AI API，此为纯关键词分类摘要。配置 Gemini 可获取 AI 智能分析。\n\n"
+        report += "> 当前未配置 AI API，此为纯关键词分类摘要。配置 Gemini 可获取 AI 智能分析。\n\n"
         for cat, items in categorized.items():
             if items:
                 report += f"## {cat}\n\n"
@@ -120,27 +119,6 @@ class NewsAnalyzer:
                     report += f"- [{item['source_name']}] {item['title']}\n"
                 report += "\n"
         return report
-
-    def _categorize_news_items(self, news: list) -> dict:
-        categorized = {}
-        for item in news:
-            text = f"{item['title']} {item.get('content', '')}"
-            found = False
-            for cat, keywords in Config.NEWS_CATEGORIES.items():
-                for kw in keywords:
-                    if kw in text:
-                        if cat not in categorized:
-                            categorized[cat] = []
-                        categorized[cat].append(item)
-                        found = True
-                        break
-                if found:
-                    break
-            if not found:
-                if "其他" not in categorized:
-                    categorized["其他"] = []
-                categorized["其他"].append(item)
-        return categorized
 
     def quick_analysis(self, news_item: dict) -> dict:
         if self.provider == "none":

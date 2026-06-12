@@ -23,11 +23,30 @@ Windows encoding quirk: always set `$env:PYTHONIOENCODING="utf-8"` before runnin
 Single Python app, 4 loosely-coupled modules orchestrated by `scheduler.py`.
 
 ```
-config.py → collector.py (fetch) → analyzer.py (summarize) → web_generator.py (HTML) + feishu_pusher.py (push)
+config.py → collectors/ (fetch) → core/analyzer.py (summarize) → core/web_generator.py (HTML) + core/feishu_pusher.py (push)
                           ↘ SQLite (news.db) stores all articles & reports
 ```
 
 Entrypoint: `main.py` parses `{pre_market, intraday, post_market, all, init}`.
+
+## Project Structure
+
+```
+news-anly/
+├── main.py                 # CLI entrypoint
+├── config.py               # All config: sources, categories, API keys
+├── collectors/             # Data source handlers (add new source = new file here)
+│   ├── __init__.py         # NewsCollector: pipeline orchestration + DB
+│   ├── cls.py              # 财联社 - sign-based JSON API
+│   └── cninfo.py           # 巨潮资讯 - POST form announcements
+├── core/                   # Business logic
+│   ├── analyzer.py         # LLM summarization + keyword fallback
+│   ├── scheduler.py        # pre_market / intraday / post_market orchestration
+│   ├── web_generator.py    # Static HTML report generation
+│   └── feishu_pusher.py    # Feishu card message push
+├── output/                 # Generated HTML (gitignored)
+└── .github/workflows/      # CI automation
+```
 
 ## Config
 
@@ -47,7 +66,8 @@ All config lives in `config.py` + `.env` loaded via `python-dotenv`.
 
 Adding a new data source requires:
 1. Entry in `config.py` `NEWS_SOURCES` dict (with `type`, `api_url`, `params`)
-2. Source-specific parse logic in `collector.py` `_collect_api()`
+2. New source file in `collectors/` with a `collect(config) -> list[dict]` function
+3. Register module in `collectors/__init__.py` `_HANDLERS` dict
 
 ## CI / GitHub Actions
 
