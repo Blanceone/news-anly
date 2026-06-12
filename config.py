@@ -24,45 +24,41 @@ class Config:
 
     # Data sources config
     NEWS_SOURCES = {
-        "wallstreetcn": {
-            "name": "华尔街见闻",
-            "url": "https://wallstreetcn.com/live/global",
-            "type": "api",
-            "api_url": "https://api-one.wallstcn.com/apiv1/content/lives?channel=global-channel&limit=30",
-        },
         "cls": {
             "name": "财联社",
             "url": "https://www.cls.cn/telegraph",
             "type": "api",
-            "api_url": "https://www.cls.cn/v1/roll/get_roll_list?app=CailianpressWeb&os=web&sv=8.7.6&rn=30",
+            "api_url": "https://www.cls.cn/v1/roll/get_roll_list",
+            "params": {
+                "app": "CailianpressWeb",
+                "os": "web",
+                "sv": "7.7.5",
+                "rn": "30",
+            },
             "headers": {
                 "Referer": "https://www.cls.cn/telegraph",
             },
         },
-        "xueqiu_hot": {
-            "name": "雪球热门",
-            "url": "https://xueqiu.com/hq",
+        "cninfo": {
+            "name": "巨潮资讯",
+            "url": "http://www.cninfo.com.cn/new/commonUrl/pageOfSearch?url=disclosure/list/search",
             "type": "api",
-            "api_url": "https://xueqiu.com/statuses/hot/listV2.json?type=10&count=30",
-            "cookies": {"xq_a_token": "dummy"},
-        },
-        "36kr": {
-            "name": "36氪",
-            "url": "https://36kr.com/",
-            "type": "rss",
-            "rss_url": "https://36kr.com/feed",
-        },
-        "reuters": {
-            "name": "Reuters",
-            "url": "https://www.reuters.com/",
-            "type": "rss",
-            "rss_url": "https://www.reutersagency.com/feed/",
-        },
-        "bloomberg_cn": {
-            "name": "Bloomberg",
-            "url": "https://www.bloomberg.com/",
-            "type": "rss",
-            "rss_url": "https://feeds.bloomberg.com/markets/news.rss",
+            "api_url": "http://www.cninfo.com.cn/new/hisAnnouncement/query",
+            "params": {
+                "pageNum": 1,
+                "pageSize": 30,
+                "column": "szse",
+                "tabName": "fulltext",
+                "plate": "sz,sh,bj",
+                "stock": "",
+                "searchkey": "",
+                "category": "",
+                "trade": "",
+                "seDate": "",
+                "sortName": "code",
+                "sortType": "asc",
+                "isHLtitle": "true",
+            },
         },
     }
 

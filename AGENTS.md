@@ -40,18 +40,14 @@ All config lives in `config.py` + `.env` loaded via `python-dotenv`.
 
 ## Data Sources — Known State
 
-| Source | Status | Issue |
-|--------|--------|-------|
-| wallstreetcn | ✅ 30 items/run | |
-| 36kr (RSS) | ✅ 30 items/run | |
-| cls (财联社 API) | ❌ returns empty | API/anti-scrape |
-| xueqiu_hot | ❌ need cookies | login required |
-| reuters (RSS) | ❌ unreachable | network |
-| bloomberg_cn (RSS) | ❌ unreachable | network |
+| Source | Type | Status | Detail |
+|--------|------|--------|--------|
+| cls (财联社) | JSON API | ✅ 30 items/run | Sign: SHA1→MD5 of sorted params. Requires `last_time` + `sign` params. See `_collect_api()` in `collector.py:58`. |
+| cninfo (巨潮资讯) | POST form | ✅ 30 items/run | Company announcements. POST to `http://www.cninfo.com.cn/new/hisAnnouncement/query`. Title format: `[股票代码 股票名] 公告标题`. |
 
 Adding a new data source requires:
-1. Entry in `config.py` `NEWS_SOURCES` dict
-2. Parse logic in `collector.py` `_collect_api()` or `_collect_rss()` (source-specific JSON path extraction)
+1. Entry in `config.py` `NEWS_SOURCES` dict (with `type`, `api_url`, `params`)
+2. Source-specific parse logic in `collector.py` `_collect_api()`
 
 ## CI / GitHub Actions
 

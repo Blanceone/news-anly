@@ -1,12 +1,8 @@
 import hashlib
-import json
-import re
 import sqlite3
 import time
 from datetime import datetime, timedelta
-from typing import Optional
 
-import feedparser
 import requests
 from bs4 import BeautifulSoup
 
@@ -66,34 +62,9 @@ class NewsCollector:
 
     def _collect_source(self, source_id: str, config: dict) -> list:
         source_type = config.get("type", "rss")
-        if source_type == "rss":
-            return self._collect_rss(source_id, config)
-        elif source_type == "api":
+        if source_type == "api":
             return self._collect_api(source_id, config)
-        elif source_type == "api_json":
-            return self._collect_api_json(source_id, config)
         return []
-
-    def _collect_rss(self, source_id: str, config: dict) -> list:
-        url = config.get("rss_url", config.get("url", ""))
-        if not url:
-            return []
-        feed = feedparser.parse(url)
-        items = []
-        for entry in feed.entries[:30]:
-            title = entry.get("title", "")
-            link = entry.get("link", "")
-            content = entry.get("summary", entry.get("description", ""))
-            pub_time = entry.get("published_parsed")
-            items.append({
-                "title": title,
-                "content": BeautifulSoup(content, "html.parser").get_text() if content else "",
-                "url": link,
-                "source": source_id,
-                "source_name": config["name"],
-                "created_at": datetime(*pub_time[:6]) if pub_time else datetime.now(),
-            })
-        return items
 
     def _collect_api(self, source_id: str, config: dict) -> list:
         api_url = config.get("api_url", "")
@@ -105,79 +76,66 @@ class NewsCollector:
         }
         custom_headers = config.get("headers", {})
         headers.update(custom_headers)
-        cookies = config.get("cookies", {})
-        try:
-            resp = requests.get(api_url, headers=headers, cookies=cookies, timeout=15)
-            resp.encoding = "utf-8"
-            data = resp.json()
-        except Exception:
-            return []
+        params = config.get("params", {}).copy()
         items = []
 
-        if source_id == "wallstreetcn":
-            for item in data.get("data", {}).get("items", []):
-                title = item.get("title", "") or item.get("content_text", "")[:80]
+        if source_id == "cls":
+            ts = int(time.time())
+            params["last_time"] = str(ts)
+            input_str = "&".join(f"{k}={params[k]}" for k in sorted(params))
+            sign = hashlib.md5(hashlib.sha1(input_str.encode()).hexdigest().encode()).hexdigest()
+            params["sign"] = sign
+            try:
+                resp = requests.get(api_url, params=params, headers=headers, timeout=15)
+                resp.encoding = "utf-8"
+                data = resp.json()
+            except Exception:
+                return []
+            roll_data = data.get("data", {}).get("roll_data", [])
+            for item in roll_data:
+                title = item.get("title", "") or BeautifulSoup(item.get("content", ""), "html.parser").get_text()[:80]
                 items.append({
                     "title": title,
-                    "content": item.get("content_text", ""),
-                    "url": f"https://wallstreetcn.com/live/global/{item.get('id')}",
+                    "content": BeautifulSoup(item.get("content", ""), "html.parser").get_text(),
+                    "url": f"https://www.cls.cn/detail/{item.get('id')}",
                     "source": source_id,
                     "source_name": config["name"],
-                    "created_at": datetime.now(),
+                    "created_at": datetime.fromtimestamp(item.get("ctime", time.time())),
                 })
 
-        elif source_id == "cls":
-            data = data.get("data", {})
-            if isinstance(data, dict):
-                items_list = data.get("roll_list", data.get("list", data.get("data", [])))
-            elif isinstance(data, list):
-                items_list = data
-            else:
-                items_list = []
-            for item in items_list:
-                if isinstance(item, dict):
-                    title = item.get("title", "") or item.get("content", "")[:80]
-                    items.append({
-                        "title": title,
-                        "content": BeautifulSoup(item.get("content", ""), "html.parser").get_text(),
-                        "url": f"https://www.cls.cn/detail/{item.get('id')}",
-                        "source": source_id,
-                        "source_name": config["name"],
-                        "created_at": datetime.now(),
-                    })
-
-        elif source_id == "xueqiu":
-            items_list = data.get("data", {}).get("items", data.get("list", data.get("data", [])))
-            for item in items_list:
-                if isinstance(item, dict):
-                    title = item.get("title", "") or item.get("name", "")
-                    items.append({
-                        "title": title,
-                        "content": item.get("text", "") or item.get("description", ""),
-                        "url": f"https://xueqiu.com/{item.get('user_id', item.get('userId', ''))}/{item.get('id', '')}",
-                        "source": source_id,
-                        "source_name": config["name"],
-                        "created_at": datetime.now(),
-                    })
+        elif source_id == "cninfo":
+            try:
+                resp = requests.post(api_url, data=params, headers=headers, timeout=15)
+                resp.encoding = "utf-8"
+                data = resp.json()
+            except Exception:
+                return []
+            for ann in data.get("announcements", []):
+                title = ann.get("announcementTitle", "")
+                sec_name = ann.get("secName", "")
+                sec_code = ann.get("secCode", "")
+                adjunct_url = ann.get("adjunctUrl", "")
+                items.append({
+                    "title": f"[{sec_code} {sec_name}] {title}",
+                    "content": f"{sec_name}({sec_code}) 发布公告: {title}",
+                    "url": f"http://static.cninfo.com.cn/{adjunct_url}" if adjunct_url else "",
+                    "source": source_id,
+                    "source_name": config["name"],
+                    "created_at": self._parse_cninfo_time(ann.get("announcementTime")),
+                    "stock_code": sec_code,
+                })
 
         return items
 
-    def _collect_api_json(self, source_id: str, config: dict) -> list:
-        api_url = config.get("api_url", "")
-        if not api_url:
-            return []
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": config.get("url", ""),
-        }
-        try:
-            resp = requests.get(api_url, headers=headers, timeout=15)
-            resp.encoding = "utf-8"
-            data = resp.json()
-        except Exception:
-            return []
-        items = []
-        return items
+    def _parse_cninfo_time(self, t):
+        if isinstance(t, str):
+            try:
+                return datetime.strptime(t, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                pass
+        if isinstance(t, (int, float)):
+            return datetime.fromtimestamp(t / 1000 if t > 1e10 else t)
+        return datetime.now()
 
     def _deduplicate(self, news: list) -> list:
         seen = set()
