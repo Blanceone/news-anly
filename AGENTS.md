@@ -10,8 +10,8 @@ All tokens and API keys are stored in `C:\Users\13979\Desktop\notes\apis.txt`. A
 pip install -r requirements.txt
 cp .env.example .env        # then edit with keys
 python main.py run           # 单次增量采集+分析+推送
-python main.py run --loop    # 持续循环采集（默认60秒间隔）
-python main.py run --loop -i 30  # 每30秒轮询
+python main.py run --loop    # 持续循环采集（默认5秒间隔）
+python main.py run --loop -i 30  # 自定义间隔（秒）
 python main.py init          # check config
 ```
 
