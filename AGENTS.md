@@ -40,7 +40,7 @@ news-anly/
 │   ├── analyzer.py         # LLM analysis + mark-as-analyzed
 │   ├── scheduler.py        # Single run() flow: fetch → analyze → push
 │   └── feishu_pusher.py    # Feishu card message push
-└── .github/workflows/      # CI automation
+└── .github/workflows/      # (仅存根)
 ```
 
 ## Config
@@ -51,7 +51,7 @@ All config lives in `config.py` + `.env` loaded via `python-dotenv`.
 - **DATA_RETENTION_HOURS** (default 72): old data auto-deleted on each run.
 - **NEWS_SOURCES**: dict in `config.py`. Each entry has source-specific URL/params.
 - **NEWS_CATEGORIES**: substring keyword matching dict.
-- `.env` is gitignored. GitHub Actions uses repo Secrets, not `.env`.
+- `.env` is gitignored.
 
 ## Data Sources — Known State
 
@@ -64,15 +64,6 @@ Adding a new data source requires:
 1. Entry in `config.py` `NEWS_SOURCES` dict
 2. New source file with `collect(config, since=None) -> list[dict]`
 3. Register module in `collectors/__init__.py` `_HANDLERS` dict
-
-## CI / GitHub Actions
-
-Single workflow: `.github/workflows/collect.yml`
-- **Cron**: `*/5 * * * *` (triggers every 5 min, GH Actions max)
-- **Loop**: inside job runs `--loop` mode with 60s interval, up to 6h per run
-- **Cache**: `news.db` cached between runs via `actions/cache`, preventing re-fetch/re-analysis
-- Secrets needed: `GEMINI_API_KEY`, `FEISHU_WEBHOOK_URL`, `STOCK_WATCHLIST` (as Variable or Secret)
-- Env vars written to `.env` in CI via `echo`
 
 ## SQLite Schema
 
