@@ -9,10 +9,35 @@ import re
 import sqlite3
 from datetime import datetime
 
-from config import Config
 from services.llm_client import LLMClient
 
-SYSTEM_PROMPT = """你是一名专业财经事件抽取助手。
+EVENT_TYPE_DEFS = """
+事件类型（必填，选一个）：
+- ORDER 订单类：重大订单、长期订单、海外订单、中标项目、战略合作
+- EARNINGS 业绩类：业绩预增、业绩预减、业绩快报、年报、季报
+- TECHNOLOGY 技术突破：技术突破、新工艺、新产品、技术认证、专利
+- POLICY 政策催化：国家政策、地方政策、行业规范、补贴
+- MNA 并购重组：收购、兼并、资产重组、借壳
+- CAPITAL 股东行为：增持、减持、回购、股权激励
+- RISK 风险事件：处罚、诉讼、问询函、安全事故、退市风险
+- OTHER 其他：不属于以上类别的事件
+
+情绪（必填，三选一）：
+- positive 正面利好：订单、技术突破、业绩增长、政策支持
+- negative 负面利空：减持、处罚、诉讼、亏损
+- neutral 中性：日常事项、召开会议、发布公告
+
+重要性（必填，四选一）：
+- S 重大事件：国家级产业政策、千亿级项目、行业颠覆性技术
+- A 重大催化：重大订单、核心技术突破、超预期业绩
+- B 普通利好：一般合作、产品发布
+- C 影响较小：常规公告、日常事项
+
+novelty_score（必填，0-100）：
+- 已反复报道=10-30，普通更新=40-60，首次披露=70-90，行业首创=90-100
+"""
+
+SYSTEM_PROMPT = f"""你是一名专业财经事件抽取助手。
 
 你的任务：从新闻中提取结构化事件信息。
 
@@ -22,16 +47,27 @@ SYSTEM_PROMPT = """你是一名专业财经事件抽取助手。
 - 判断股价
 
 必须：
-- 输出标准JSON
-- 不输出解释
-- 不输出Markdown
+- 输出标准JSON（不输出解释，不输出Markdown）
+- event_type / sentiment / importance / novelty_score 为必填
 
-事件类型必须从以下集合中选择：
-ORDER（订单类）、EARNINGS（业绩类）、TECHNOLOGY（技术突破）、
-POLICY（政策催化）、MNA（并购重组）、CAPITAL（股东行为）、
-RISK（风险事件）、OTHER（其他）
+{EVENT_TYPE_DEFS}
 
-重要性等级：S（重大事件）、A（重大催化）、B（普通利好）、C（影响较小）"""
+输出JSON格式：
+{{
+  "event_type": "ORDER|EARNINGS|TECHNOLOGY|POLICY|MNA|CAPITAL|RISK|OTHER",
+  "event_subtype": "具体子类别",
+  "industry": "所属行业",
+  "sub_industry": "细分行业",
+  "sentiment": "positive|negative|neutral",
+  "importance": "S|A|B|C",
+  "novelty_score": 85,
+  "entities": [{{"type": "company|stock|technology|industry", "name": "实体名称"}}],
+  "amount": 金额数字,
+  "amount_unit": "亿元|万元|元",
+  "keywords": ["关键词1", "关键词2"],
+  "summary": "一句话总结事件",
+  "reason": "分类理由"
+}}"""
 
 USER_PROMPT_TEMPLATE = """请分析以下财经新闻：
 
@@ -79,23 +115,23 @@ class EventService:
 
     def _compute_event_score(self, importance: str, novelty: int) -> int:
         base = {"S": 100, "A": 80, "B": 60, "C": 40}.get(importance, 40)
-        novelty_factor = novelty / 100.0
         return int(base * 0.7 + novelty * 0.3)
 
     def extract(self, title: str, content: str) -> dict:
         if not self.llm.available:
             return self._fallback()
-
         user_prompt = USER_PROMPT_TEMPLATE.format(title=title, content=content[:1000])
-
-        try:
-            raw = self.llm.chat(SYSTEM_PROMPT, user_prompt, temperature=0.1)
-            parsed = self._parse_json(raw)
-            if parsed:
-                return self._validate(parsed)
-        except Exception:
-            pass
-
+        for attempt in range(3):
+            try:
+                raw = self.llm.chat(SYSTEM_PROMPT, user_prompt, temperature=0.1)
+                parsed = self._parse_json(raw)
+                if parsed:
+                    validated = self._validate(parsed)
+                    if validated.get("event_type") != "OTHER" or validated["novelty_score"] > 0:
+                        validated["raw_response"] = raw
+                        return validated
+            except Exception:
+                pass
         return self._fallback()
 
     def _parse_json(self, text: str) -> dict:
@@ -111,22 +147,17 @@ class EventService:
         valid_types = {"ORDER", "EARNINGS", "TECHNOLOGY", "POLICY", "MNA", "CAPITAL", "RISK", "OTHER"}
         valid_importance = {"S", "A", "B", "C"}
         valid_sentiment = {"positive", "negative", "neutral"}
-
         event_type = str(data.get("event_type", "OTHER")).upper()
         if event_type not in valid_types:
             event_type = "OTHER"
-
         importance = str(data.get("importance", "C")).upper()
         if importance not in valid_importance:
             importance = "C"
-
         sentiment = str(data.get("sentiment", "neutral")).lower()
         if sentiment not in valid_sentiment:
             sentiment = "neutral"
-
         novelty = int(data.get("novelty_score", 0) or 0)
         novelty = max(0, min(100, novelty))
-
         return {
             "event_type": event_type,
             "event_subtype": str(data.get("event_subtype", "")),
@@ -146,20 +177,13 @@ class EventService:
 
     def _fallback(self) -> dict:
         return {
-            "event_type": "OTHER",
-            "event_subtype": "",
-            "industry": "",
-            "sub_industry": "",
-            "sentiment": "neutral",
-            "importance": "C",
-            "novelty_score": 0,
-            "event_score": 0,
-            "entities": [],
-            "amount": 0.0,
-            "amount_unit": "",
-            "keywords": [],
-            "ai_summary": "",
-            "reason": "",
+            "event_type": "OTHER", "event_subtype": "",
+            "industry": "", "sub_industry": "",
+            "sentiment": "neutral", "importance": "C",
+            "novelty_score": 0, "event_score": 0,
+            "entities": [], "amount": 0.0, "amount_unit": "",
+            "keywords": [], "ai_summary": "", "reason": "",
+            "raw_response": "",
         }
 
     def process_news_item(self, news_item: dict) -> dict:
@@ -173,34 +197,24 @@ class EventService:
                      keywords_json, ai_summary, reason, raw_response)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                "news",
-                news_item["id"],
-                result["event_type"],
-                result["event_subtype"],
-                result["industry"],
-                result["sub_industry"],
-                result["sentiment"],
-                result["importance"],
-                result["novelty_score"],
-                result["event_score"],
+                "news", news_item["id"],
+                result["event_type"], result["event_subtype"],
+                result["industry"], result["sub_industry"],
+                result["sentiment"], result["importance"],
+                result["novelty_score"], result["event_score"],
                 json.dumps(result["entities"], ensure_ascii=False),
-                result["amount"],
-                result["amount_unit"],
+                result["amount"], result["amount_unit"],
                 json.dumps(result["keywords"], ensure_ascii=False),
-                result["ai_summary"],
-                result["reason"],
-                "",
+                result["ai_summary"], result["reason"],
+                result.get("raw_response", ""),
             ))
             conn.execute("""
                 UPDATE news SET sentiment=?, category=?, impact=?, ai_analysis=?, updated_at=?
                 WHERE id=?
             """, (
-                result["sentiment"],
-                result["event_type"],
-                result["event_score"],
-                result["ai_summary"],
-                datetime.now().isoformat(),
-                news_item["id"],
+                result["sentiment"], result["event_type"],
+                result["event_score"], result["ai_summary"],
+                datetime.now().isoformat(), news_item["id"],
             ))
         return result
 

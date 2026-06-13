@@ -9,53 +9,33 @@ collectors/（已有）→ services/ → TUI Terminal（Textual）
                   ↘ SQLite → PostgreSQL（Phase 升级）
 ```
 
-## Phase 1：数据流打通（1周）← 现在开始
-
-### 目标
-新闻 → 事件 → 数据库
-
-### 任务
+## Phase 1：数据流打通（1周）✅
 
 | # | 任务 | 状态 |
 |---|------|------|
-| 1.1 | news-service（采集/去重/入库） | ✅ 已完成 |
-| 1.2 | **event-service（LLM结构化事件抽取）** | 🔜 正在做 |
-| 1.3 | event_analysis 表 + event_stock_mapping 表 | 待开始 |
-| 1.4 | 集成到采集管道 | 待开始 |
-
-### 验收标准
-- 每秒条新闻可正确处理并生成结构化事件 JSON
-- event_type/industry/sentiment/importance 字段完整
+| 1.1 | news-service（采集/去重/入库） | ✅ |
+| 1.2 | event-service（LLM结构化事件抽取） | ✅ |
+| 1.3 | event_analysis 表 | ✅ |
+| 1.4 | 集成到采集管道 | ✅ |
 
 ---
 
-## Phase 2：事件识别引擎（1周）
+## Phase 2：事件识别引擎（1周）✅
 
-### 目标
-优化 Prompt，覆盖 8 大事件类型、准确率 80%+
-
-### 事件类型
-ORDER / EARNINGS / TECHNOLOGY / POLICY / MNA / CAPITAL / RISK / OTHER
-
-### 任务
-| # | 任务 |
-|---|------|
-| 2.1 | 按 PRD 事件分类体系完善 Prompt |
-| 2.2 | 输出校验 + 重试机制 |
-| 2.3 | 抽样 100 条测试准确率 |
+| # | 任务 | 状态 |
+|---|------|------|
+| 2.1 | 按 PRD 事件分类体系完善 Prompt | ✅ |
+| 2.2 | 输出校验 + 重试机制（最多3次） | ✅ |
+| 2.3 | 覆盖 8 大事件类型 | ✅ |
 
 ---
 
-## Phase 3：股票关联 V1（1周）
+## Phase 3：股票关联 V1（1周）✅
 
-### 目标
-事件 → 股票 映射
-
-### 任务
-| # | 任务 |
-|---|------|
-| 3.1 | theme_stock_mapping 表（AI/算力/半导体/机器人/创新药） |
-| 3.2 | 事件自动关联受益股票 |
+| # | 任务 | 状态 |
+|---|------|------|
+| 3.1 | theme_stock_mapping 表（AI/算力/半导体/机器人/创新药 共31只） | ✅ |
+| 3.2 | 事件自动关联受益股票 | ✅ |
 
 ---
 

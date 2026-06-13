@@ -59,6 +59,39 @@ class NewsCollector:
                 )
             """)
             conn.execute("""
+                CREATE TABLE IF NOT EXISTS stock_basic (
+                    stock_code TEXT PRIMARY KEY,
+                    stock_name TEXT NOT NULL,
+                    industry TEXT,
+                    market_value REAL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS theme_stock_mapping (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    theme_key TEXT NOT NULL,
+                    theme_name TEXT NOT NULL,
+                    stock_code TEXT NOT NULL,
+                    stock_name TEXT NOT NULL,
+                    benefit_level INTEGER,
+                    benefit_reason TEXT,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS event_stock_mapping (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id INTEGER NOT NULL,
+                    stock_code TEXT NOT NULL,
+                    stock_name TEXT NOT NULL,
+                    benefit_level INTEGER,
+                    benefit_score INTEGER,
+                    match_reason TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS event_analysis (
                     event_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     source_type TEXT,
