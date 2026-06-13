@@ -13,6 +13,9 @@ class Config:
     OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "")
     OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
+    # Tushare
+    TUSHARE_TOKEN = os.getenv("TUSHARE_TOKEN", "")
+
     # Feishu
     FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL", "")
 

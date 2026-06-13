@@ -38,28 +38,26 @@ class ThemeViewScreen(Screen):
         yield Header()
         with Horizontal():
             with Vertical(classes="left-panel"):
-                yield Static("🔥 主题列表", classes="panel-title")
+                yield Static("主题列表", classes="panel-title")
                 yield DataTable(id="theme-list")
             with Vertical(classes="right-panel"):
-                yield Static("📊 关联股票", classes="panel-title")
+                yield Static("关联股票", classes="panel-title")
                 yield DataTable(id="theme-stocks")
         yield Footer()
 
     def on_mount(self):
         self.db = TuiDB()
+        self.query_one("#theme-list", DataTable).add_columns("主题", "关联股票")
+        self.query_one("#theme-stocks", DataTable).add_columns("代码", "名称", "受益等级", "原因")
         self._refresh()
         self.set_interval(30, self._refresh)
 
     def _refresh(self):
         table = self.query_one("#theme-list", DataTable)
         table.clear()
-        table.add_columns("主题", "关联股票")
         self.themes = self.db.hot_themes()
         for t in self.themes:
-            table.add_row(
-                t.get("theme_name", ""),
-                str(t.get("stock_count", 0)),
-            )
+            table.add_row(t.get("theme_name", ""), str(t.get("stock_count", 0)))
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected):
         if event.data_table.id == "theme-list":
@@ -71,7 +69,6 @@ class ThemeViewScreen(Screen):
     def _show_theme_stocks(self, theme_key):
         table = self.query_one("#theme-stocks", DataTable)
         table.clear()
-        table.add_columns("代码", "名称", "受益等级", "原因")
         stocks = self.db.theme_stocks(theme_key)
         level_map = {1: "一级", 2: "二级", 3: "三级"}
         for s in stocks:
@@ -83,4 +80,4 @@ class ThemeViewScreen(Screen):
                 (s.get("benefit_reason") or "")[:40],
             )
         if not stocks:
-            table.add_row("—", "暂无数据", "", "")
+            table.add_row("--", "no data", "", "")

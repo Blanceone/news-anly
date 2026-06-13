@@ -1,7 +1,7 @@
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, ScrollableContainer
 from textual.screen import Screen
-from textual.widgets import Header, Footer, Static, DataTable, Label
+from textual.widgets import Header, Footer, Static, DataTable
 from textual.reactive import reactive
 
 from tui.db import TuiDB
@@ -47,10 +47,8 @@ class DashboardScreen(Screen):
     #news-feed {
         height: 1fr;
     }
-    #news-feed Static {
+    #news-content {
         padding: 0 1;
-        border-bottom: solid $border;
-        height: 1;
     }
     """
 
@@ -62,21 +60,16 @@ class DashboardScreen(Screen):
             yield Static("", id="stat-stocks", classes="stat-item")
         with Horizontal():
             with Vertical(classes="news-panel"):
-                yield Static("📰 实时新闻", classes="panel-title")
+                yield Static("news 实时新闻", classes="panel-title")
                 with ScrollableContainer(id="news-feed"):
-                    yield Static("加载中...")
+                    yield Static("loading...", id="news-content")
             with Vertical(classes="stocks-panel"):
-                yield Static("🏆 推荐榜", classes="panel-title")
+                yield Static("top 推荐榜", classes="panel-title")
                 yield DataTable(id="top-stocks-table")
         with Vertical(classes="themes-panel"):
-            yield Static("🔥 热门题材", classes="panel-title")
+            yield Static("hot 热门题材", classes="panel-title")
             yield DataTable(id="themes-table")
         yield Footer()
-
-    def on_mount(self):
-        self.db = TuiDB()
-        self._refresh()
-        self.set_interval(10, self._refresh)
 
     def _refresh(self):
         self._update_stats()
@@ -86,18 +79,27 @@ class DashboardScreen(Screen):
 
     def _update_stats(self):
         s = self.db.stats()
-        self.query_one("#stat-news").update(f"📰 新闻: {s['news']}")
-        self.query_one("#stat-events").update(f"📌 事件: {s['events']}")
-        self.query_one("#stat-stocks").update(f"📈 股票: {s['stocks']}")
+        self.query_one("#stat-news").update(f"news: {s['news']}")
+        self.query_one("#stat-events").update(f"event: {s['events']}")
+        self.query_one("#stat-stocks").update(f"stock: {s['stocks']}")
+
+    def on_mount(self):
+        self.db = TuiDB()
+        self._init_tables()
+        self._refresh()
+        self.set_interval(10, self._refresh)
+
+    def _init_tables(self):
+        self.query_one("#top-stocks-table", DataTable).add_columns("#", "code", "name", "score", "evt", "bnf", "mkt")
+        self.query_one("#themes-table", DataTable).add_columns("theme", "stocks")
 
     def _update_top_stocks(self):
         table = self.query_one("#top-stocks-table", DataTable)
         table.clear()
-        table.add_columns("排名", "代码", "名称", "总分", "事件", "受益", "市场")
         rows = self.db.top_stocks(15)
-        for r in rows:
+        for i, r in enumerate(rows, 1):
             table.add_row(
-                str(r.get("total_score", 0)),
+                str(i),
                 r.get("stock_code", ""),
                 r.get("stock_name", ""),
                 str(int(r.get("total_score", 0))),
@@ -106,27 +108,25 @@ class DashboardScreen(Screen):
                 str(int(r.get("market_score", 0))),
             )
         if not rows:
-            table.add_row("—", "暂无数据", "", "", "", "", "")
+            table.add_row("--", "no data", "", "", "", "", "")
 
     def _update_news(self):
-        container = self.query_one("#news-feed", ScrollableContainer)
-        container.remove_children()
-        items = self.db.recent_news(hours=24, limit=30)
+        items = self.db.recent_news(hours=72, limit=30)
+        widget = self.query_one("#news-content", Static)
         if not items:
-            container.mount(Static("暂无新闻"))
+            widget.update("(no news)")
             return
+        lines = []
         for n in items:
-            cat = n.get("category") or n.get("source_name", "")
             ts = (n.get("created_at") or "")[11:19] if n.get("created_at") else ""
-            label = f"[{ts}] [{cat}] {n['title'][:70]}"
-            container.mount(Static(label))
+            lines.append(f"{ts} {n['title'][:70]}")
+        widget.update("\n".join(lines))
 
     def _update_themes(self):
         table = self.query_one("#themes-table", DataTable)
         table.clear()
-        table.add_columns("主题", "关联股票")
         themes = self.db.hot_themes()
         for t in themes:
             table.add_row(t.get("theme_name", ""), str(t.get("stock_count", 0)))
         if not themes:
-            table.add_row("暂无数据", "0")
+            table.add_row("no data", "0")

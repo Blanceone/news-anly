@@ -3,12 +3,11 @@ import io
 import os
 import sys
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
-
 from core.scheduler import NewsScheduler
 
 
 def run(loop=False, interval=None):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
     s = NewsScheduler()
     if loop:
         s.run_loop(interval)
@@ -17,6 +16,7 @@ def run(loop=False, interval=None):
 
 
 def run_init():
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
     from config import Config
     print("=== A股情报系统 初始化检查 ===")
     print(f"\nAI 提供商: {_detect_provider()}")

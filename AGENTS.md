@@ -20,6 +20,7 @@ python main.py run           # 单次增量采集+分析+推送
 python main.py run --loop    # 持续循环采集（默认5秒间隔）
 python main.py run --loop -i 30  # 自定义间隔（秒）
 python main.py init          # check config
+python main.py tui           # TUI终端
 ```
 
 ## Architecture

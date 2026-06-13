@@ -1,5 +1,5 @@
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical, ScrollableContainer
+from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Header, Footer, Static, DataTable
 
@@ -29,8 +29,9 @@ class EventViewScreen(Screen):
     DataTable {
         height: 1fr;
     }
-    ScrollableContainer {
+    #event-detail {
         height: 1fr;
+        overflow-y: auto;
     }
     """
 
@@ -38,23 +39,22 @@ class EventViewScreen(Screen):
         yield Header()
         with Horizontal():
             with Vertical(classes="left-panel"):
-                yield Static("📌 事件列表", classes="panel-title")
+                yield Static("事件列表", classes="panel-title")
                 yield DataTable(id="event-list")
             with Vertical(classes="right-panel"):
-                yield Static("🎯 影响股票", classes="panel-title")
-                with ScrollableContainer(id="event-detail"):
-                    yield Static("请选择左侧事件查看详情")
+                yield Static("影响股票", classes="panel-title")
+                yield Static("请选择左侧事件查看详情", id="event-detail")
         yield Footer()
 
     def on_mount(self):
         self.db = TuiDB()
+        self.query_one("#event-list", DataTable).add_columns("时间", "类型", "行业", "强度", "市场验证", "摘要")
         self._refresh()
         self.set_interval(30, self._refresh)
 
     def _refresh(self):
         table = self.query_one("#event-list", DataTable)
         table.clear()
-        table.add_columns("时间", "类型", "行业", "强度", "市场验证", "摘要")
         self.events = self.db.event_list(hours=48, limit=60)
         for e in self.events:
             ts = (e.get("created_at") or "")[11:19] if e.get("created_at") else ""
@@ -73,16 +73,14 @@ class EventViewScreen(Screen):
                 self._show_event_detail(ev["event_id"])
 
     def _show_event_detail(self, event_id):
-        container = self.query_one("#event-detail", ScrollableContainer)
-        container.remove_children()
-
+        widget = self.query_one("#event-detail", Static)
         ev = None
         for e in self.events:
             if e["event_id"] == event_id:
                 ev = e
                 break
         if not ev:
-            container.mount(Static("事件未找到"))
+            widget.update("事件未找到")
             return
 
         lines = [
@@ -101,11 +99,8 @@ class EventViewScreen(Screen):
         level_map = {1: "一级", 2: "二级", 3: "三级"}
         for s in stocks:
             lv = level_map.get(s.get("benefit_level"), str(s.get("benefit_level", "")))
-            lines.append(
-                f"  {s.get('stock_code', '')} {s.get('stock_name', '')} "
-                f"[{lv}] {s.get('match_reason', '')}"
-            )
+            lines.append(f"  {s.get('stock_code', '')} {s.get('stock_name', '')} [{lv}] {s.get('match_reason', '')}")
         if not stocks:
             lines.append("  (无关联股票)")
 
-        container.mount(Static("\n".join(lines)))
+        widget.update("\n".join(lines))

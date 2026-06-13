@@ -4,10 +4,7 @@ A-Stock Intelligence Terminal — TUI 终端
 启动: python -m tui.app  或  python main.py tui
 """
 import sys
-import io
 from datetime import datetime
-
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal
@@ -66,10 +63,10 @@ class StockTUI(App):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="top-bar"):
-            yield Static(" [1] 📰 看板 ", id="tab-dashboard", classes="tab-item active")
-            yield Static(" [2] 🔥 主题 ", id="tab-themes", classes="tab-item")
-            yield Static(" [3] 📈 股票 ", id="tab-stocks", classes="tab-item")
-            yield Static(" [4] 📌 事件 ", id="tab-events", classes="tab-item")
+            yield Static(" [1] 看板 ", id="tab-dashboard", classes="tab-item active")
+            yield Static(" [2] 主题 ", id="tab-themes", classes="tab-item")
+            yield Static(" [3] 股票 ", id="tab-stocks", classes="tab-item")
+            yield Static(" [4] 事件 ", id="tab-events", classes="tab-item")
             yield Static("", id="clock")
         yield Footer()
 
