@@ -27,6 +27,8 @@ def run_init():
     print(f"数据源: {len(Config.NEWS_SOURCES)} 个")
     print(f"数据保留: {Config.DATA_RETENTION_HOURS} 小时")
     print(f"采集间隔: {Config.FETCH_INTERVAL_SECONDS} 秒")
+    print(f"事件识别: {'已启用 (AI)' if _detect_provider() != '未配置 (使用基础关键词分类)' else '未启用'}")
+    print(f"事件类型: ORDER / EARNINGS / TECHNOLOGY / POLICY / MNA / CAPITAL / RISK / OTHER")
     print("\n环境检查:")
     print(f"  Python: {sys.version}")
     print(f"  工作目录: {os.getcwd()}")

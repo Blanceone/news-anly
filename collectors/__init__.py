@@ -58,6 +58,29 @@ class NewsCollector:
                     created_at TIMESTAMP
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS event_analysis (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_type TEXT,
+                    source_id TEXT,
+                    event_type TEXT,
+                    event_subtype TEXT,
+                    industry TEXT,
+                    sub_industry TEXT,
+                    sentiment TEXT,
+                    importance TEXT,
+                    novelty_score INTEGER,
+                    event_score INTEGER,
+                    entities_json TEXT,
+                    amount REAL,
+                    amount_unit TEXT,
+                    keywords_json TEXT,
+                    ai_summary TEXT,
+                    reason TEXT,
+                    raw_response TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
             conn.commit()
 
     def get_last_fetch_time(self) -> datetime:

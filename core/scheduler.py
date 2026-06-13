@@ -5,6 +5,7 @@ from config import Config
 from collectors import NewsCollector
 from core.analyzer import NewsAnalyzer
 from core.feishu_pusher import FeishuPusher
+from services.event_service import EventService
 
 
 class NewsScheduler:
@@ -12,6 +13,7 @@ class NewsScheduler:
         self.collector = NewsCollector()
         self.analyzer = NewsAnalyzer()
         self.pusher = FeishuPusher()
+        self.event_service = EventService()
 
     def _tick(self) -> bool:
         now = datetime.now()
@@ -28,8 +30,9 @@ class NewsScheduler:
         unanalyzed = self.collector.get_unanalyzed_news(limit=50)
         if unanalyzed:
             print(f"  待分析 {len(unanalyzed)} 条新闻")
-            analyzed_ids = self.analyzer.analyze_batch(unanalyzed)
-            self.collector.mark_analyzed(analyzed_ids)
+            for item in unanalyzed:
+                self.event_service.process_news_item(item)
+            self.collector.mark_analyzed([item["id"] for item in unanalyzed])
         else:
             print("  无待分析新闻")
 

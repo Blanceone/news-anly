@@ -17,11 +17,11 @@ python main.py init          # check config
 
 ## Architecture
 
-Single Python app, 3 loosely-coupled modules orchestrated by `scheduler.py`.
+Single Python app, orchestrated by `scheduler.py`. New business services in `services/`.
 
 ```
-config.py → collectors/ (fetch) → core/analyzer.py (analyze) → core/feishu_pusher.py (push)
-                          ↘ SQLite (news.db) stores all articles
+collectors/ (fetch) → services/event_service.py (AI事件抽取) → core/feishu_pusher.py (push)
+                    ↘ SQLite (news.db + event_analysis)
 ```
 
 Entrypoint: `main.py` parses `{run, init}`.
@@ -36,6 +36,10 @@ news-anly/
 │   ├── __init__.py         # NewsCollector: pipeline + DB (freshness, analyzed flag)
 │   ├── cls.py              # 财联社 - sign-based JSON API, accepts since param
 │   └── cninfo.py           # 巨潮资讯 - POST form announcements, accepts since param
+├── services/               # 业务服务层
+│   ├── __init__.py
+│   ├── llm_client.py       # 统一 LLM 调用客户端
+│   └── event_service.py    # AI事件识别（结构化JSON输出）
 ├── core/                   # Business logic
 │   ├── analyzer.py         # LLM analysis + mark-as-analyzed
 │   ├── scheduler.py        # Single run() flow: fetch → analyze → push
