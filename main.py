@@ -75,12 +75,15 @@ def _detect_provider():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="A股情报系统")
     parser.add_argument("mode", nargs="?", default="run",
-                        choices=["run", "init"])
+                        choices=["run", "init", "tui"])
     parser.add_argument("--loop", action="store_true", help="持续循环采集")
     parser.add_argument("-i", "--interval", type=int, default=None, help="轮询间隔（秒）")
     args = parser.parse_args()
 
     if args.mode == "init":
         run_init()
+    elif args.mode == "tui":
+        from tui.app import main as tui_main
+        tui_main()
     else:
         run(loop=args.loop, interval=args.interval)

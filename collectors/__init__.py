@@ -92,6 +92,19 @@ class NewsCollector:
                 )
             """)
             conn.execute("""
+                CREATE TABLE IF NOT EXISTS market_confirmation (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id INTEGER NOT NULL,
+                    board_name TEXT,
+                    sector_change REAL,
+                    volume_amount REAL,
+                    up_count INTEGER,
+                    down_count INTEGER,
+                    confirmation_score INTEGER,
+                    calculated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS stock_score (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     stock_code TEXT NOT NULL,

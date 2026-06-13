@@ -77,16 +77,17 @@ V1 公式：`TotalScore = EventScore × 40% + BenefitScore × 60%`
 
 ---
 
-## Phase 7：TUI 终端（1周）
+## Phase 7：TUI 终端 ✅
 
-### 框架
-Python Textual
+| # | 任务 | 状态 |
+|---|------|------|
+| 7.1 | Dashboard（实时新闻/热点题材/推荐股票） | ✅ |
+| 7.2 | Theme View（主题排行/关联股票） | ✅ |
+| 7.3 | Stock View（评分/受益逻辑/相关新闻） | ✅ |
+| 7.4 | Event View（事件列表/详情/影响股票） | ✅ |
+| 7.5 | main.py tui 命令 + 键盘导航 (1-4/r/q) | ✅ |
 
-### 页面
-- Dashboard（实时新闻/热点题材/推荐股票）
-- Theme View（主题排行/资金流向/关联股票）
-- Stock View（评分/受益逻辑/相关新闻）
-- Event View（事件列表/详情/影响股票）
+启动命令：`python main.py tui`
 
 ---
 

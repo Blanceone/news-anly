@@ -32,6 +32,15 @@ Entrypoint: `main.py` parses `{run, init}`.
 ```
 news-anly/
 ├── main.py                 # CLI entrypoint (run / init)
+├── tui/                    # Textual TUI 终端
+│   ├── app.py              # Main app: top-bar nav (1-4), clock, bindings
+│   ├── db.py               # DB query layer for TUI screens
+│   ├── screens/
+│   │   ├── dashboard.py    # Dashboard: news feed + top stocks + hot themes
+│   │   ├── theme_view.py   # Theme View: theme list → stock detail
+│   │   ├── stock_view.py   # Stock View: score listing → detail (events/themes)
+│   │   └── event_view.py   # Event View: event list → affected stocks
+│   └── widgets/            # (reserved for shared widgets)
 ├── config.py               # All config: sources, categories, API keys, retention
 ├── collectors/             # Data source handlers
 │   ├── __init__.py         # NewsCollector: pipeline + DB (freshness, analyzed flag)
@@ -43,7 +52,8 @@ news-anly/
 │   ├── event_service.py    # AI事件识别（结构化JSON输出）
 │   ├── stock_service.py    # 股票关联映射（主题→受益股）
 │   ├── knowledge_graph.py  # 知识图谱（实体+关系+BFS推理）
-│   └── scoring_engine.py   # 评分系统（事件+受益→综合评分）
+│   ├── scoring_engine.py   # 评分系统（事件+受益→综合评分）
+│   └── market_verifier.py  # 市场验证引擎（行情数据→MarketScore）
 ├── core/                   # Business logic
 │   ├── analyzer.py         # LLM analysis + mark-as-analyzed
 │   ├── scheduler.py        # Single run() flow: fetch → analyze → push
@@ -75,9 +85,10 @@ Adding a new data source requires:
 
 ## SQLite Schema
 
-Auto-created `news.db` with two tables:
+Auto-created `news.db` with tables:
 - `news(id TEXT PK, title, content, summary, source, source_name, url, category, sentiment, impact, related_stocks, ai_analysis, freshness TEXT DEFAULT 'medium', analyzed INTEGER DEFAULT 0, created_at, updated_at)`
 - `reports(id INTEGER PK, type, title, content, created_at)` (保留, 未使用)
+- `market_confirmation(id PK, event_id, board_name, sector_change, volume_amount, up_count, down_count, confirmation_score, calculated_at)`
 
 ## Freshness
 - **high**: `created_at` within 1 hour
@@ -91,9 +102,26 @@ Auto-created `news.db` with two tables:
 - On each `run()`, fetches unanalyzed items, runs AI, marks as analyzed.
 - Prevents re-analysis across restarts.
 
+## TUI Terminal
+
+启动: `python main.py tui` 或 `python -m tui.app`
+
+| 按键 | 功能 |
+|------|------|
+| 1 | Dashboard（新闻流+推荐榜+题材） |
+| 2 | Theme View（主题列表→关联股票） |
+| 3 | Stock View（评分排序→事件详情） |
+| 4 | Event View（事件列表→影响股票） |
+| r | 手动刷新当前页面 |
+| q | 退出 |
+
+- Dashboard 10秒自动刷新，其余页面30秒自动刷新
+
 ## Noteworthy
 
 - Feishu card messages are interactive JSON, sent via webhook POST. No Feishu SDK.
 - Data older than 72 hours is auto-deleted on each run (`DATA_RETENTION_HOURS`).
+- MarketVerifier only runs during trading hours (weekdays 9:25-15:00), otherwise returns score 0.
+- Scoring formula: `Total = Event×30% + Benefit×40% + Market×30%`.
 - cls `collect()` passes `since` as `last_time` API param — only gets items after that time.
 - cninfo `collect()` paginates up to 5 pages, stops when items are older than `since`.

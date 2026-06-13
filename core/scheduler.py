@@ -9,6 +9,7 @@ from services.event_service import EventService
 from services.stock_service import StockService
 from services.knowledge_graph import KnowledgeGraph
 from services.scoring_engine import ScoringEngine
+from services.market_verifier import MarketVerifier
 
 
 class NewsScheduler:
@@ -20,6 +21,7 @@ class NewsScheduler:
         self.stock_service = StockService()
         self.knowledge_graph = KnowledgeGraph()
         self.scoring_engine = ScoringEngine()
+        self.market_verifier = MarketVerifier()
 
     def _tick(self) -> bool:
         now = datetime.now()
@@ -46,6 +48,11 @@ class NewsScheduler:
                         event.get("industry", ""),
                     )
                     self._save_kg_result(event_id, kg_result)
+                    self.market_verifier.verify_event(
+                        event_id,
+                        event.get("industry", ""),
+                        event.get("keywords", []),
+                    )
             self.collector.mark_analyzed([item["id"] for item in unanalyzed])
         else:
             print("  无待分析新闻")
@@ -95,10 +102,10 @@ class NewsScheduler:
 
     def _print_ranking(self, stocks: list):
         print(f"\n  ── TOP 推荐榜 ──")
-        print(f"  {'#':3s} {'代码':7s} {'名称':7s} {'总分':5s} {'事件':5s} {'受益':5s}")
+        print(f"  {'#':3s} {'代码':7s} {'名称':7s} {'总分':5s} {'事件':5s} {'受益':5s} {'市场':5s}")
         for s in stocks:
             print(f"  {s['rank']:3d} {s['stock_code']:7s} {s['stock_name']:6s}  "
-                  f"{s['total_score']:4d}  {s['event_score']:4d}  {s['benefit_score']:4d}")
+                  f"{s['total_score']:4d}  {s['event_score']:4d}  {s['benefit_score']:4d}  {s['market_score']:4d}")
         print()
 
     def run(self):

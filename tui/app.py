@@ -1,0 +1,108 @@
+"""
+A-Stock Intelligence Terminal — TUI 终端
+
+启动: python -m tui.app  或  python main.py tui
+"""
+import sys
+import io
+from datetime import datetime
+
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+
+from textual.app import App, ComposeResult
+from textual.containers import Horizontal
+from textual.widgets import Footer, Static
+from textual.binding import Binding
+
+from tui.screens.dashboard import DashboardScreen
+from tui.screens.theme_view import ThemeViewScreen
+from tui.screens.stock_view import StockViewScreen
+from tui.screens.event_view import EventViewScreen
+
+
+class StockTUI(App):
+    SCREENS = {
+        "dashboard": DashboardScreen,
+        "themes": ThemeViewScreen,
+        "stocks": StockViewScreen,
+        "events": EventViewScreen,
+    }
+    BINDINGS = [
+        Binding("1", "switch('dashboard')", "看板"),
+        Binding("2", "switch('themes')", "主题"),
+        Binding("3", "switch('stocks')", "股票"),
+        Binding("4", "switch('events')", "事件"),
+        Binding("q", "quit", "退出"),
+        Binding("r", "refresh", "刷新"),
+    ]
+
+    CSS = """
+    Screen {
+        background: $surface;
+    }
+    #top-bar {
+        dock: top;
+        height: 3;
+        background: $panel;
+        border-bottom: solid $primary;
+    }
+    .tab-item {
+        width: 1fr;
+        content-align: center middle;
+        color: $text-muted;
+    }
+    .tab-item.active {
+        color: $text;
+        text-style: bold;
+        background: $accent 10%;
+    }
+    #clock {
+        width: 16;
+        content-align: right middle;
+        color: $text-muted;
+        padding: 0 1;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Horizontal(id="top-bar"):
+            yield Static(" [1] 📰 看板 ", id="tab-dashboard", classes="tab-item active")
+            yield Static(" [2] 🔥 主题 ", id="tab-themes", classes="tab-item")
+            yield Static(" [3] 📈 股票 ", id="tab-stocks", classes="tab-item")
+            yield Static(" [4] 📌 事件 ", id="tab-events", classes="tab-item")
+            yield Static("", id="clock")
+        yield Footer()
+
+    def on_mount(self):
+        self._update_clock()
+        self.set_interval(1, self._update_clock)
+        self.push_screen("dashboard")
+
+    def _update_clock(self):
+        w = self.query_one("#clock", Static)
+        w.update(datetime.now().strftime("%H:%M:%S"))
+
+    def action_switch(self, screen_name: str):
+        self.push_screen(screen_name)
+        for name in ["dashboard", "themes", "stocks", "events"]:
+            w = self.query_one(f"#tab-{name}", Static)
+            w.remove_class("active")
+        w = self.query_one(f"#tab-{screen_name}", Static)
+        w.add_class("active")
+
+    def action_refresh(self):
+        screen = self.screen
+        if hasattr(screen, "_refresh"):
+            screen._refresh()
+
+    def action_quit(self):
+        self.exit()
+
+
+def main():
+    app = StockTUI()
+    app.run()
+
+
+if __name__ == "__main__":
+    main()

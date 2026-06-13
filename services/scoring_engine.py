@@ -70,9 +70,11 @@ class ScoringEngine:
                     es.stock_code, es.stock_name,
                     es.benefit_score, es.benefit_level,
                     e.event_score, e.event_type, e.importance,
-                    e.sentiment, e.ai_summary, e.event_id
+                    e.sentiment, e.ai_summary, e.event_id,
+                    COALESCE(mc.confirmation_score, 0) as market_score
                 FROM event_stock_mapping es
                 JOIN event_analysis e ON es.event_id = e.event_id
+                LEFT JOIN market_confirmation mc ON es.event_id = mc.event_id
                 WHERE e.created_at > datetime(?, 'unixepoch')
             """, (since_ts,)).fetchall()
             return [dict(r) for r in rows]
@@ -82,6 +84,7 @@ class ScoringEngine:
             "stock_name": "",
             "event_scores": [],
             "benefit_scores": [],
+            "market_scores": [],
             "events": [],
             "event_count": 0,
         })
@@ -91,6 +94,7 @@ class ScoringEngine:
             s["stock_name"] = r["stock_name"]
             s["event_scores"].append(r["event_score"] or 0)
             s["benefit_scores"].append(r["benefit_score"] or 0)
+            s["market_scores"].append(r["market_score"] or 0)
             s["events"].append({
                 "event_id": r["event_id"],
                 "type": r["event_type"],
@@ -106,14 +110,15 @@ class ScoringEngine:
         for code, data in stock_data.items():
             event_score = max(data["event_scores"]) if data["event_scores"] else 0
             benefit_score = max(data["benefit_scores"]) if data["benefit_scores"] else 0
-            total = event_score * 0.4 + benefit_score * 0.6
+            market_score = max(data["market_scores"]) if data["market_scores"] else 0
+            total = event_score * 0.3 + benefit_score * 0.4 + market_score * 0.3
             top_events = sorted(data["events"], key=lambda x: -x.get("event_id", 0))[:3]
             results.append({
                 "stock_code": code,
                 "stock_name": data["stock_name"],
                 "event_score": event_score,
                 "benefit_score": benefit_score,
-                "market_score": 0,
+                "market_score": market_score,
                 "financial_score": 0,
                 "technical_score": 0,
                 "capital_score": 0,
@@ -151,7 +156,7 @@ class ScoringEngine:
                 """, (
                     r["stock_code"], r["stock_name"], "SHORT",
                     r["rank"], r["total_score"],
-                    f"事件{r['event_score']}分 *40% + 受益{r['benefit_score']}分 *60%",
+                    f"事件{r['event_score']}*30% + 受益{r['benefit_score']}*40% + 市场{r['market_score']}*30%",
                 ))
             conn.commit()
         print(f"  [评分] 已计算 {len(results)} 只股票的评分")
