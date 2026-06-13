@@ -29,6 +29,8 @@ def run_init():
     print(f"采集间隔: {Config.FETCH_INTERVAL_SECONDS} 秒")
     print(f"事件识别: {'已启用 (AI)' if _detect_provider().startswith('Google') else '未启用 (需配置API)'}")
     print(f"股票映射: AI/算力/半导体/机器人/创新药 (共31只)")
+    kg_count = _kg_count()
+    print(f"知识图谱: {'已加载' if kg_count else '空'} ({kg_count}个实体)")
     print("\n环境检查:")
     print(f"  Python: {sys.version}")
     print(f"  工作目录: {os.getcwd()}")
@@ -37,6 +39,15 @@ def run_init():
     print("  python main.py run --loop       # 持续循环采集")
     print("  python main.py run --loop -i 30 # 每30秒轮询一次")
     print("  python main.py init             # 本检查")
+
+
+def _kg_count():
+    import sqlite3
+    try:
+        with sqlite3.connect("news.db") as conn:
+            return conn.execute("SELECT COUNT(*) FROM kg_entity").fetchone()[0]
+    except Exception:
+        return 0
 
 
 def _detect_provider():

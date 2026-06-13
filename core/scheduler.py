@@ -7,6 +7,7 @@ from core.analyzer import NewsAnalyzer
 from core.feishu_pusher import FeishuPusher
 from services.event_service import EventService
 from services.stock_service import StockService
+from services.knowledge_graph import KnowledgeGraph
 
 
 class NewsScheduler:
@@ -16,6 +17,7 @@ class NewsScheduler:
         self.pusher = FeishuPusher()
         self.event_service = EventService()
         self.stock_service = StockService()
+        self.knowledge_graph = KnowledgeGraph()
 
     def _tick(self) -> bool:
         now = datetime.now()
@@ -37,20 +39,25 @@ class NewsScheduler:
                 event_id = self._get_last_event_id()
                 if event_id:
                     self.stock_service.process_event_stocks(event_id, event)
+                    kg_result = self.knowledge_graph.reason(
+                        event.get("keywords", []),
+                        event.get("industry", ""),
+                    )
+                    self._save_kg_result(event_id, kg_result)
             self.collector.mark_analyzed([item["id"] for item in unanalyzed])
         else:
             print("  无待分析新闻")
 
         if new_news:
             self.pusher.push_news(new_news[:10])
-            top_stocks = self.stock_service.get_top_stocks(hours=24, limit=5)
+            kg_top = self.knowledge_graph.get_top_stocks(limit=10)
             summary = self.analyzer.summarize_news(
                 self.collector.get_recent_news(hours=24, limit=100)
             )
             if summary:
                 self.pusher.push_report(summary)
-            if top_stocks:
-                self._print_top_stocks(top_stocks)
+            if kg_top:
+                self._print_kg_top(kg_top)
         else:
             print("  无新新闻，跳过推送")
 
@@ -66,13 +73,28 @@ class NewsScheduler:
         except Exception:
             return None
 
-    def _print_top_stocks(self, stocks: list):
-        print(f"\n  ── TOP 受益股 ──")
+    def _save_kg_result(self, event_id: int, stocks: list):
+        if not stocks:
+            return
+        import sqlite3
+        benefit_scores = {1: 95, 2: 80, 3: 60}
+        with sqlite3.connect("news.db") as conn:
+            for stock in stocks[:10]:
+                level = 1 if stock["score"] >= 85 else (2 if stock["score"] >= 60 else 3)
+                conn.execute("""
+                    INSERT OR IGNORE INTO event_stock_mapping
+                        (event_id, stock_code, stock_name, benefit_level, benefit_score, match_reason)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (event_id, stock["stock_code"], stock["stock_name"],
+                      level, benefit_scores.get(level, 40),
+                      f"图谱推理(路径{stock['path_count']}条,最大权重{stock['score']})"))
+            conn.commit()
+
+    def _print_kg_top(self, stocks: list):
+        print(f"\n  ── 知识图谱 TOP10 受益股 ──")
         for s in stocks:
-            print(f"    {s['stock_code']} {s['stock_name']:6s}  "
-                  f"受益{float(s['avg_benefit']):.0f}  "
-                  f"事件{float(s['avg_event']):.0f}  "
-                  f"{s['event_count']}事件")
+            themes_str = (s.get("themes") or "")[:30]
+            print(f"    {s['stock_code']} {s['stock_name']:6s}  评分{s['score']:.0f}  {themes_str}")
         print()
 
     def run(self):

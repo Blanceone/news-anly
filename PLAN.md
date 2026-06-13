@@ -39,18 +39,14 @@ collectors/（已有）→ services/ → TUI Terminal（Textual）
 
 ---
 
-## Phase 4：知识图谱 V1（2周）
+## Phase 4：知识图谱 V1（2周）✅
 
-### 目标
-主题 → 行业 → 技术 → 产品 → 股票 推理链
-
-### 任务
-| # | 任务 |
-|---|------|
-| 4.1 | 图谱节点表（Theme/Industry/Technology/Product/Stock） |
-| 4.2 | 图谱关系表（CONTAINS/DEPENDS/SUPPLY/BENEFIT） |
-| 4.3 | 初始数据填充（50~100 主题） |
-| 4.4 | 多级受益推理引擎 |
+| # | 任务 | 状态 |
+|---|------|------|
+| 4.1 | kg_entity + kg_relation + kg_direct_benefit 三表 | ✅ |
+| 4.2 | CONTAINS/ENABLE/BENEFIT 关系体系 | ✅ |
+| 4.3 | 初始数据（29实体/28关系/29直连受益） | ✅ |
+| 4.4 | BFS多级推理引擎（最大深度4层） | ✅ |
 
 ---
 
