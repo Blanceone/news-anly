@@ -4,6 +4,13 @@
 
 All tokens and API keys are stored in `C:\Users\13979\Desktop\notes\apis.txt`. Always read from that file when any credential is needed. Never hardcode keys in code or commit them.
 
+## GitHub Commit Rule
+
+每次提交到 GitHub 前，必须检查是否需要更新 `README.md`：
+- 新增功能/模块/配置文件 → 更新 README 项目结构或功能描述
+- 数据源/依赖/配置变更 → 更新 README 对应章节
+- 若本次变更不涉及用户可见变化，则无需更新
+
 ## Commands
 
 ```bash
