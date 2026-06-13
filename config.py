@@ -19,11 +19,8 @@ class Config:
     # Stock Watchlist
     STOCK_WATCHLIST = [s.strip() for s in os.getenv("STOCK_WATCHLIST", "").split(",") if s.strip()]
 
-    # Run mode
-    RUN_MODE = os.getenv("RUN_MODE", "all")
-
-    # Data retention
-    DATA_RETENTION_DAYS = int(os.getenv("DATA_RETENTION_DAYS", "7"))
+    # Data retention (hours)
+    DATA_RETENTION_HOURS = int(os.getenv("DATA_RETENTION_HOURS", "72"))
 
     # Data sources config
     NEWS_SOURCES = {

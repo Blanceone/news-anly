@@ -10,7 +10,7 @@ class FeishuPusher:
     def __init__(self):
         self.webhook_url = Config.FEISHU_WEBHOOK_URL
 
-    def push_news(self, news: list, report_type: str = "intraday"):
+    def push_news(self, news: list):
         if not self.webhook_url:
             print("  [飞书] 未配置 Webhook URL，跳过推送")
             return
@@ -18,8 +18,6 @@ class FeishuPusher:
             print("  [飞书] 无新闻可推送")
             return
 
-        type_labels = {"pre_market": "盘前必读", "intraday": "盘中快讯", "post_market": "盘后复盘"}
-        type_label = type_labels.get(report_type, "新闻推送")
         now = datetime.now().strftime("%H:%M")
 
         items = []
@@ -38,11 +36,11 @@ class FeishuPusher:
         card = {
             "config": {"wide_screen_mode": True},
             "header": {
-                "title": {"tag": "plain_text", "content": f"{type_label} ({now})"},
-                "template": "blue" if report_type == "pre_market" else ("indigo" if report_type == "post_market" else "green"),
+                "title": {"tag": "plain_text", "content": f"新闻推送 ({now})"},
+                "template": "green",
             },
             "elements": [
-                {"tag": "div", "text": {"tag": "lark_md", "content": f"共 {len(news)} 条新闻，以下为前 10 条："}},
+                {"tag": "div", "text": {"tag": "lark_md", "content": f"共 {len(news)} 条新新闻，以下为前 10 条："}},
                 {"tag": "hr"},
             ] + items + [
                 {"tag": "hr"},
@@ -61,34 +59,19 @@ class FeishuPusher:
         except Exception as e:
             print(f"  [飞书] 推送异常: {e}")
 
-    def push_report(self, report_type: str, title: str, content: str, web_url: str = ""):
-        if not self.webhook_url:
+    def push_report(self, content: str):
+        if not self.webhook_url or not content:
             return
-        type_labels = {"pre_market": "盘前必读", "intraday": "盘中快讯", "post_market": "盘后复盘"}
-        type_label = type_labels.get(report_type, "报告")
 
         content_preview = content[:500] if content else ""
-        elements = [
-            {"tag": "div", "text": {"tag": "lark_md", "content": content_preview}},
-        ]
-        if web_url:
-            elements.append({
-                "tag": "action",
-                "actions": [{
-                    "tag": "button",
-                    "text": {"tag": "plain_text", "content": "查看完整报告"},
-                    "type": "primary",
-                    "multi_url": {"url": web_url, "android_url": web_url, "ios_url": web_url},
-                }],
-            })
-
         card = {
             "config": {"wide_screen_mode": True},
             "header": {
-                "title": {"tag": "plain_text", "content": f"{type_label} - {title}"},
-                "template": "blue" if report_type == "pre_market" else ("indigo" if report_type == "post_market" else "green"),
+                "title": {"tag": "plain_text", "content": f"简报 ({datetime.now().strftime('%H:%M')})"},
+                "template": "blue",
             },
-            "elements": elements + [
+            "elements": [
+                {"tag": "div", "text": {"tag": "lark_md", "content": content_preview}},
                 {"tag": "hr"},
                 {"tag": "note", "elements": [{"tag": "plain_text", "content": "A股情报系统"}]},
             ],
@@ -96,6 +79,6 @@ class FeishuPusher:
         payload = {"msg_type": "interactive", "card": card}
         try:
             requests.post(self.webhook_url, json=payload, timeout=10)
-            print(f"  [飞书] 报告推送成功")
+            print(f"  [飞书] 简报推送成功")
         except Exception as e:
-            print(f"  [飞书] 报告推送异常: {e}")
+            print(f"  [飞书] 简报推送异常: {e}")

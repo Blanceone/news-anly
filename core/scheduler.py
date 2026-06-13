@@ -11,51 +11,32 @@ class NewsScheduler:
         self.analyzer = NewsAnalyzer()
         self.pusher = FeishuPusher()
 
-    def pre_market(self):
+    def run(self):
+        now = datetime.now()
         print(f"\n{'='*50}")
-        print(f"[{datetime.now().strftime('%H:%M')}] 执行盘前汇总...")
+        print(f"[{now.strftime('%H:%M')}] 开始增量采集...")
         print(f"{'='*50}")
-        news = self.collector.collect_all()
-        weekday = datetime.now().weekday()
-        window = 72 if weekday == 0 else 18
-        self._filter_recent(news, hours=window)
-        summary = self.analyzer.summarize_news(news)
-        self.pusher.push_report("pre_market", f"盘前必读 ({datetime.now().strftime('%m-%d')})", summary)
-        self.pusher.push_news(news[:8], "pre_market")
-        print(f"  [完成] 盘前汇总")
 
-    def intraday(self):
-        print(f"\n{'='*50}")
-        print(f"[{datetime.now().strftime('%H:%M')}] 执行盘中采集...")
-        print(f"{'='*50}")
-        news = self.collector.collect_all()
-        self._filter_recent(news, hours=2)
-        if not news:
-            print("  无新新闻")
-            return
-        self.pusher.push_news(news[:10], "intraday")
+        last_fetch = self.collector.get_last_fetch_time()
+        print(f"  上次采集时间: {last_fetch.strftime('%Y-%m-%d %H:%M')}")
 
-    def post_market(self):
-        print(f"\n{'='*50}")
-        print(f"[{datetime.now().strftime('%H:%M')}] 执行盘后复盘...")
-        print(f"{'='*50}")
-        news = self.collector.get_recent_news(hours=12, limit=200)
-        summary = self.analyzer.summarize_news(news)
-        self.pusher.push_report("post_market", f"盘后复盘 ({datetime.now().strftime('%m-%d')})", summary)
-        print(f"  [完成] 盘后复盘")
+        new_news = self.collector.collect_since(last_fetch)
+        print(f"  新增 {len(new_news)} 条新闻")
 
-    def _filter_recent(self, news, hours=24):
-        cutoff = datetime.now().timestamp() - hours * 3600
-        news[:] = [n for n in news if _ts(n) > cutoff]
+        unanalyzed = self.collector.get_unanalyzed_news(limit=50)
+        if unanalyzed:
+            print(f"  待分析 {len(unanalyzed)} 条新闻")
+            analyzed_ids = self.analyzer.analyze_batch(unanalyzed)
+            self.collector.mark_analyzed(analyzed_ids)
+        else:
+            print("  无待分析新闻")
 
+        if new_news:
+            self.pusher.push_news(new_news[:10])
+            summary = self.analyzer.summarize_news(self.collector.get_recent_news(hours=24, limit=100))
+            if summary:
+                self.pusher.push_report(summary)
+        else:
+            print("  无新新闻，跳过推送")
 
-def _ts(item):
-    t = item.get("created_at", "")
-    if isinstance(t, str):
-        try:
-            return datetime.fromisoformat(t).timestamp()
-        except Exception:
-            return 0
-    if isinstance(t, datetime):
-        return t.timestamp()
-    return 0
+        print(f"  [完成] 本次采集")

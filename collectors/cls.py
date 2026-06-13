@@ -1,7 +1,4 @@
-"""财联社 (cls.cn) 实时快讯采集
-
-API 需要签名: SHA1(排序后的参数字符串) 结果再做 MD5
-"""
+"""财联社 (cls.cn) 实时快讯采集"""
 import hashlib
 import time
 from datetime import datetime
@@ -10,7 +7,7 @@ import requests
 from bs4 import BeautifulSoup
 
 
-def collect(config: dict) -> list:
+def collect(config: dict, since: datetime = None) -> list:
     api_url = config["api_url"]
     params = config.get("params", {}).copy()
     headers = {
@@ -20,8 +17,7 @@ def collect(config: dict) -> list:
     custom_headers = config.get("headers", {})
     headers.update(custom_headers)
 
-    ts = int(time.time())
-    params["last_time"] = str(ts)
+    params["last_time"] = str(int(time.time()))
     input_str = "&".join(f"{k}={params[k]}" for k in sorted(params))
     sign = hashlib.md5(hashlib.sha1(input_str.encode()).hexdigest().encode()).hexdigest()
     params["sign"] = sign
@@ -31,7 +27,11 @@ def collect(config: dict) -> list:
     data = resp.json()
 
     items = []
+    since_ts = since.timestamp() if since else 0
     for item in data.get("data", {}).get("roll_data", []):
+        ctime = item.get("ctime", 0)
+        if since and ctime <= since_ts:
+            continue
         title = item.get("title", "") or BeautifulSoup(item.get("content", ""), "html.parser").get_text()[:80]
         items.append({
             "title": title,
@@ -39,7 +39,7 @@ def collect(config: dict) -> list:
             "url": f"https://www.cls.cn/detail/{item.get('id')}",
             "source": "cls",
             "source_name": "财联社",
-            "created_at": datetime.fromtimestamp(item.get("ctime", time.time())),
+            "created_at": datetime.fromtimestamp(ctime or time.time()),
         })
 
     return items

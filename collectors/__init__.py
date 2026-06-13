@@ -37,23 +37,40 @@ class NewsCollector:
                     impact REAL,
                     related_stocks TEXT,
                     ai_analysis TEXT,
+                    freshness TEXT DEFAULT 'medium',
+                    analyzed INTEGER DEFAULT 0,
                     created_at TIMESTAMP,
                     updated_at TIMESTAMP
                 )
             """)
+            for col in ("freshness", "analyzed"):
+                try:
+                    conn.execute(f"ALTER TABLE news ADD COLUMN {col} TEXT" if col == "freshness"
+                                 else f"ALTER TABLE news ADD COLUMN {col} INTEGER DEFAULT 0")
+                except sqlite3.OperationalError:
+                    pass
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS reports (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     type TEXT,
                     title TEXT,
                     content TEXT,
-                    html_path TEXT,
                     created_at TIMESTAMP
                 )
             """)
             conn.commit()
 
-    def collect_all(self) -> list:
+    def get_last_fetch_time(self) -> datetime:
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute("SELECT MAX(created_at) FROM news").fetchone()
+            if row and row[0]:
+                try:
+                    return datetime.fromisoformat(row[0])
+                except Exception:
+                    pass
+            return datetime.now() - timedelta(hours=24)
+
+    def collect_since(self, since: datetime) -> list:
         news = []
         for source_id, source_config in Config.NEWS_SOURCES.items():
             handler = _HANDLERS.get(source_id)
@@ -61,7 +78,7 @@ class NewsCollector:
                 print(f"  [{source_config['name']}] 未找到采集模块")
                 continue
             try:
-                items = handler.collect(source_config)
+                items = handler.collect(source_config, since)
                 news.extend(items)
                 print(f"  [{source_config['name']}] 获取 {len(items)} 条")
             except Exception as e:
@@ -69,16 +86,29 @@ class NewsCollector:
             time.sleep(1)
         news = self._deduplicate(news)
         self._save_news(news)
+        self._update_freshness()
         self._cleanup_old_news()
         return news
 
+    def _update_freshness(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                UPDATE news SET freshness = CASE
+                    WHEN created_at > datetime('now', '-1 hour') THEN 'high'
+                    WHEN created_at > datetime('now', '-24 hours') THEN 'medium'
+                    ELSE 'low'
+                END
+            """)
+            conn.commit()
+        print("  [新鲜度] 已更新")
+
     def _cleanup_old_news(self):
-        days = Config.DATA_RETENTION_DAYS
-        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+        hours = Config.DATA_RETENTION_HOURS
+        cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
         with sqlite3.connect(self.db_path) as conn:
             deleted = conn.execute("DELETE FROM news WHERE created_at < ?", (cutoff,)).rowcount
             if deleted:
-                print(f"  [清理] 已删除 {deleted} 条超过 {days} 天的旧数据")
+                print(f"  [清理] 已删除 {deleted} 条超过 {hours} 小时的旧数据")
 
     def _deduplicate(self, news: list) -> list:
         seen = set()
@@ -106,7 +136,24 @@ class NewsCollector:
                 except Exception:
                     pass
 
-    def get_recent_news(self, hours=24, limit=100) -> list:
+    def get_unanalyzed_news(self, limit=50) -> list:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("""
+                SELECT * FROM news WHERE analyzed = 0 ORDER BY created_at DESC LIMIT ?
+            """, (limit,)).fetchall()
+            return [dict(row) for row in rows]
+
+    def mark_analyzed(self, news_ids: list):
+        if not news_ids:
+            return
+        placeholders = ",".join("?" for _ in news_ids)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(f"UPDATE news SET analyzed = 1 WHERE id IN ({placeholders})", news_ids)
+            conn.commit()
+        print(f"  [标记] 已标记 {len(news_ids)} 条新闻为已分析")
+
+    def get_recent_news(self, hours=72, limit=200) -> list:
         since = (datetime.now() - timedelta(hours=hours)).isoformat()
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -125,24 +172,3 @@ class NewsCollector:
                 ORDER BY created_at DESC LIMIT ?
             """, (since, f"%{stock_code}%", f"%{stock_code}%", limit)).fetchall()
             return [dict(row) for row in rows]
-
-    def categorize_news(self, news: list) -> dict:
-        categorized = {}
-        for item in news:
-            text = f"{item['title']} {item.get('content', '')}"
-            found = False
-            for cat, keywords in Config.NEWS_CATEGORIES.items():
-                for kw in keywords:
-                    if kw in text:
-                        if cat not in categorized:
-                            categorized[cat] = []
-                        categorized[cat].append(item)
-                        found = True
-                        break
-                if found:
-                    break
-            if not found:
-                if "其他" not in categorized:
-                    categorized["其他"] = []
-                categorized["其他"].append(item)
-        return categorized

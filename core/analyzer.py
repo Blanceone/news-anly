@@ -1,5 +1,6 @@
 import json
 import re
+import sqlite3
 from datetime import datetime
 
 import requests
@@ -76,7 +77,35 @@ class NewsAnalyzer:
         except Exception as e:
             return f"[API 调用失败] {e}"
 
+    def analyze_batch(self, news_items: list, db_path="news.db") -> list:
+        if not news_items:
+            return []
+        analyzed_ids = []
+        for item in news_items:
+            try:
+                result = self.quick_analysis(item)
+                with sqlite3.connect(db_path) as conn:
+                    conn.execute("""
+                        UPDATE news SET category=?, sentiment=?, impact=?, related_stocks=?, ai_analysis=?, updated_at=?
+                        WHERE id=?
+                    """, (
+                        result.get("category", ""),
+                        result.get("sentiment", "neutral"),
+                        result.get("impact", 0),
+                        json.dumps(result.get("affected_sectors", []), ensure_ascii=False),
+                        result.get("reason", ""),
+                        datetime.now().isoformat(),
+                        item["id"],
+                    ))
+                analyzed_ids.append(item["id"])
+            except Exception as e:
+                print(f"  [分析失败] {item['title'][:30]}: {e}")
+        print(f"  [分析] 完成 {len(analyzed_ids)}/{len(news_items)} 条")
+        return analyzed_ids
+
     def summarize_news(self, news: list) -> str:
+        if not news:
+            return ""
         if self.provider == "none":
             return self._generate_basic_summary(news)
         text = "请对以下财经新闻进行分类汇总和分析，输出格式如下：\n\n"
@@ -84,7 +113,7 @@ class NewsAnalyzer:
         text += "## 重点新闻分析\n(按重要性排序，每条包含：标题、来源、核心要点、影响判断)\n\n"
         text += "## 自选股相关\n(列出与自选股相关的新闻及影响分析)\n\n"
         text += "## 风险提示\n(提示需要关注的潜在风险)\n\n"
-        text += f"以下是今日新闻数据（共{len(news)}条）：\n\n"
+        text += f"以下是新闻数据（共{len(news)}条）：\n\n"
         for i, item in enumerate(news[:50], 1):
             text += f"{i}. 【{item['source_name']}】{item['title']}\n   {item.get('content', '')[:200]}\n\n"
         return self._call_llm(text, "你是一个专业的A股财经分析师，请对新闻进行专业、简洁的分析。使用中文，输出Markdown格式。")
@@ -122,11 +151,11 @@ class NewsAnalyzer:
 
     def quick_analysis(self, news_item: dict) -> dict:
         if self.provider == "none":
-            return {"sentiment": "neutral", "impact": 0, "reason": "未配置 AI API"}
+            return {"sentiment": "neutral", "impact": 0, "category": "", "affected_sectors": [], "reason": "未配置 AI API"}
         text = f"新闻标题：{news_item['title']}\n新闻内容：{news_item.get('content', '')[:500]}"
         prompt = f"""{text}
 请分析这条新闻对A股市场的影响，返回JSON格式：
-{{"sentiment": "positive/negative/neutral", "impact": "1-10的数值表示影响程度", "affected_sectors": ["受影响板块"], "reason": "分析理由"}}"""
+{{"sentiment": "positive/negative/neutral", "impact": "1-10的数值表示影响程度", "category": "所属类别", "affected_sectors": ["受影响板块"], "reason": "分析理由"}}"""
         result = self._call_llm(prompt)
         try:
             json_match = re.search(r'\{.*\}', result, re.DOTALL)
@@ -134,4 +163,4 @@ class NewsAnalyzer:
                 return json.loads(json_match.group())
         except Exception:
             pass
-        return {"sentiment": "neutral", "impact": 0, "affected_sectors": [], "reason": "分析失败"}
+        return {"sentiment": "neutral", "impact": 0, "category": "", "affected_sectors": [], "reason": "分析失败"}
