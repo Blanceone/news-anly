@@ -23,7 +23,7 @@ Windows encoding quirk: always set `$env:PYTHONIOENCODING="utf-8"` before runnin
 Single Python app, 4 loosely-coupled modules orchestrated by `scheduler.py`.
 
 ```
-config.py → collectors/ (fetch) → core/analyzer.py (summarize) → core/web_generator.py (HTML) + core/feishu_pusher.py (push)
+config.py → collectors/ (fetch) → core/analyzer.py (summarize) → core/feishu_pusher.py (push)
                           ↘ SQLite (news.db) stores all articles & reports
 ```
 
@@ -80,17 +80,13 @@ Secrets needed: `GEMINI_API_KEY`, `FEISHU_WEBHOOK_URL`, `STOCK_WATCHLIST` (as Va
 
 Env vars are written to `.env` in CI via `echo` in workflow step (not loaded from repo file).
 
-Deploy uses `peaceiris/actions-gh-pages` from `./output`.
-
 ## SQLite Schema
 
 Auto-created `news.db` with two tables:
 - `news(id TEXT PK, title, content, summary, source, source_name, url, category, sentiment, impact, related_stocks, ai_analysis, created_at, updated_at)`
-- `reports(id INTEGER PK, type, title, content, html_path, created_at)`
+- `reports(id INTEGER PK, type, title, content, created_at)`
 
 ## Noteworthy
 
-- HTML output goes to `output/` (gitignored). Index at `output/index.html`.
-- Markdown→HTML converter is hand-written in `web_generator.py`, not a library.
 - Feishu card messages are interactive JSON, sent via webhook POST. No Feishu SDK.
-- `_get_page_url()` in `scheduler.py:96` has a placeholder URL — update before first deploy.
+- Data older than 7 days is auto-deleted on each collection run (configurable via `DATA_RETENTION_DAYS`).

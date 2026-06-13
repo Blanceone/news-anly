@@ -1,12 +1,8 @@
 name: 盘前汇总
 on:
   schedule:
-    - cron: '30 0 * * 1-5'  # 北京时间 08:30 (UTC 00:30)
+    - cron: '30 0 * * 1-5'
   workflow_dispatch:
-
-permissions:
-  contents: write
-  pages: write
 
 jobs:
   pre-market:
@@ -26,9 +22,3 @@ jobs:
           echo "STOCK_WATCHLIST=${{ vars.STOCK_WATCHLIST }}" >> .env
       - name: Run pre-market
         run: python main.py pre_market
-      - name: Deploy to Pages
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./output
-          keep_files: true

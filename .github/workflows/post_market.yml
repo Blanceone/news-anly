@@ -1,12 +1,8 @@
 name: 盘后复盘
 on:
   schedule:
-    - cron: '30 8 * * 1-5'  # 北京时间 16:30 (UTC 08:30)
+    - cron: '30 8 * * 1-5'
   workflow_dispatch:
-
-permissions:
-  contents: write
-  pages: write
 
 jobs:
   post-market:
@@ -26,9 +22,3 @@ jobs:
           echo "STOCK_WATCHLIST=${{ vars.STOCK_WATCHLIST }}" >> .env
       - name: Run post-market
         run: python main.py post_market
-      - name: Deploy to Pages
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./output
-          keep_files: true

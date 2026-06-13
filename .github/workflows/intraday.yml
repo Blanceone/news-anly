@@ -1,7 +1,7 @@
 name: 盘中快讯
 on:
   schedule:
-    - cron: '0 2,6,7 * * 1-5'  # 北京时间 10:00, 14:00, 15:00 (UTC 02:00, 06:00, 07:00)
+    - cron: '0 2,6,7 * * 1-5'
   workflow_dispatch:
 
 jobs:
