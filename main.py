@@ -31,6 +31,8 @@ def run_init():
     print(f"股票映射: AI/算力/半导体/机器人/创新药 (共31只)")
     kg_count = _kg_count()
     print(f"知识图谱: {'已加载' if kg_count else '空'} ({kg_count}个实体)")
+    score_count = _score_count()
+    print(f"评分系统: {'已启用' if score_count else '待运行'}")
     print("\n环境检查:")
     print(f"  Python: {sys.version}")
     print(f"  工作目录: {os.getcwd()}")
@@ -46,6 +48,15 @@ def _kg_count():
     try:
         with sqlite3.connect("news.db") as conn:
             return conn.execute("SELECT COUNT(*) FROM kg_entity").fetchone()[0]
+    except Exception:
+        return 0
+
+
+def _score_count():
+    import sqlite3
+    try:
+        with sqlite3.connect("news.db") as conn:
+            return conn.execute("SELECT COUNT(DISTINCT stock_code) FROM stock_score").fetchone()[0]
     except Exception:
         return 0
 

@@ -92,6 +92,36 @@ class NewsCollector:
                 )
             """)
             conn.execute("""
+                CREATE TABLE IF NOT EXISTS stock_score (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    stock_code TEXT NOT NULL,
+                    stock_name TEXT NOT NULL,
+                    score_date TEXT NOT NULL,
+                    event_score REAL DEFAULT 0,
+                    benefit_score REAL DEFAULT 0,
+                    market_score REAL DEFAULT 0,
+                    financial_score REAL DEFAULT 0,
+                    technical_score REAL DEFAULT 0,
+                    capital_score REAL DEFAULT 0,
+                    total_score REAL DEFAULT 0,
+                    event_count INTEGER DEFAULT 0,
+                    top_events TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS recommendation_result (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    stock_code TEXT NOT NULL,
+                    stock_name TEXT NOT NULL,
+                    strategy_type TEXT NOT NULL,
+                    rank_no INTEGER,
+                    score REAL,
+                    recommendation_reason TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS event_analysis (
                     event_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     source_type TEXT,

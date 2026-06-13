@@ -22,6 +22,7 @@ Single Python app, orchestrated by `scheduler.py`. New business services in `ser
 ```
 collectors/ (fetch) → services/event_service.py (AI事件抽取) → services/stock_service.py (股票关联) → core/feishu_pusher.py (push)
                     ↘ SQLite (news.db + event_analysis + stock_mapping)      ↗ services/knowledge_graph.py (知识图谱推理)
+                                                                             ↗ services/scoring_engine.py (评分→推荐榜)
 ```
 
 Entrypoint: `main.py` parses `{run, init}`.
@@ -41,7 +42,8 @@ news-anly/
 │   ├── llm_client.py       # 统一 LLM 调用客户端
 │   ├── event_service.py    # AI事件识别（结构化JSON输出）
 │   ├── stock_service.py    # 股票关联映射（主题→受益股）
-│   └── knowledge_graph.py  # 知识图谱（实体+关系+BFS推理）
+│   ├── knowledge_graph.py  # 知识图谱（实体+关系+BFS推理）
+│   └── scoring_engine.py   # 评分系统（事件+受益→综合评分）
 ├── core/                   # Business logic
 │   ├── analyzer.py         # LLM analysis + mark-as-analyzed
 │   ├── scheduler.py        # Single run() flow: fetch → analyze → push

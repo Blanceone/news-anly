@@ -8,6 +8,7 @@ from core.feishu_pusher import FeishuPusher
 from services.event_service import EventService
 from services.stock_service import StockService
 from services.knowledge_graph import KnowledgeGraph
+from services.scoring_engine import ScoringEngine
 
 
 class NewsScheduler:
@@ -18,6 +19,7 @@ class NewsScheduler:
         self.event_service = EventService()
         self.stock_service = StockService()
         self.knowledge_graph = KnowledgeGraph()
+        self.scoring_engine = ScoringEngine()
 
     def _tick(self) -> bool:
         now = datetime.now()
@@ -50,16 +52,17 @@ class NewsScheduler:
 
         if new_news:
             self.pusher.push_news(new_news[:10])
-            kg_top = self.knowledge_graph.get_top_stocks(limit=10)
             summary = self.analyzer.summarize_news(
                 self.collector.get_recent_news(hours=24, limit=100)
             )
             if summary:
                 self.pusher.push_report(summary)
-            if kg_top:
-                self._print_kg_top(kg_top)
+
+        ranked = self.scoring_engine.calculate(hours=24)
+        if ranked:
+            self._print_ranking(ranked[:10])
         else:
-            print("  无新新闻，跳过推送")
+            print("  无评分数据")
 
         print(f"  [完成] 本次采集")
         return bool(new_news)
@@ -90,11 +93,12 @@ class NewsScheduler:
                       f"图谱推理(路径{stock['path_count']}条,最大权重{stock['score']})"))
             conn.commit()
 
-    def _print_kg_top(self, stocks: list):
-        print(f"\n  ── 知识图谱 TOP10 受益股 ──")
+    def _print_ranking(self, stocks: list):
+        print(f"\n  ── TOP 推荐榜 ──")
+        print(f"  {'#':3s} {'代码':7s} {'名称':7s} {'总分':5s} {'事件':5s} {'受益':5s}")
         for s in stocks:
-            themes_str = (s.get("themes") or "")[:30]
-            print(f"    {s['stock_code']} {s['stock_name']:6s}  评分{s['score']:.0f}  {themes_str}")
+            print(f"  {s['rank']:3d} {s['stock_code']:7s} {s['stock_name']:6s}  "
+                  f"{s['total_score']:4d}  {s['event_score']:4d}  {s['benefit_score']:4d}")
         print()
 
     def run(self):

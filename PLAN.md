@@ -50,22 +50,17 @@ collectors/（已有）→ services/ → TUI Terminal（Textual）
 
 ---
 
-## Phase 5：评分系统（1周）
+## Phase 5：评分系统（1周）✅
 
-### 公式
-```
-总分 = 事件强度 × 20% + 受益程度 × 30%
-     + 市场验证 × 20% + 财务质量 × 15%
-     + 技术趋势 × 10% + 资金流向 × 5%
-```
+V1 公式：`TotalScore = EventScore × 40% + BenefitScore × 60%`
 
-### 任务
-| # | 任务 |
-|---|------|
-| 5.1 | EventScore（S=100/A=80/B=60/C=40） |
-| 5.2 | BenefitScore（一级=95/二级=80/三级=60） |
-| 5.3 | TotalScore 综合评分 |
-| 5.4 | TOP20 推荐榜输出 |
+| # | 任务 | 状态 |
+|---|------|------|
+| 5.1 | EventScore（S=100/A=80/B=60/C=40） | ✅ |
+| 5.2 | BenefitScore（一级=95/二级=80/三级=60） | ✅ |
+| 5.3 | TotalScore 综合评分（事件*40% + 受益*60%） | ✅ |
+| 5.4 | stock_score / recommendation_result 表 | ✅ |
+| 5.5 | TOP20 推荐榜输出 | ✅ |
 
 ---
 
