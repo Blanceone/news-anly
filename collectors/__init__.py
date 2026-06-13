@@ -69,7 +69,16 @@ class NewsCollector:
             time.sleep(1)
         news = self._deduplicate(news)
         self._save_news(news)
+        self._cleanup_old_news()
         return news
+
+    def _cleanup_old_news(self):
+        days = Config.DATA_RETENTION_DAYS
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            deleted = conn.execute("DELETE FROM news WHERE created_at < ?", (cutoff,)).rowcount
+            if deleted:
+                print(f"  [清理] 已删除 {deleted} 条超过 {days} 天的旧数据")
 
     def _deduplicate(self, news: list) -> list:
         seen = set()

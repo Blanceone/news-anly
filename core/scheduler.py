@@ -20,7 +20,9 @@ class NewsScheduler:
         print(f"[{datetime.now().strftime('%H:%M')}] 执行盘前汇总...")
         print(f"{'='*50}")
         news = self.collector.collect_all()
-        self._filter_recent(news, hours=18)
+        weekday = datetime.now().weekday()
+        window = 72 if weekday == 0 else 18
+        self._filter_recent(news, hours=window)
         summary = self.analyzer.summarize_news(news)
         report_title = f"盘前必读 ({datetime.now().strftime('%m-%d')})"
         filepath = self.web.generate_report("pre_market", report_title, summary, news)

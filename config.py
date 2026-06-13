@@ -22,6 +22,9 @@ class Config:
     # Run mode
     RUN_MODE = os.getenv("RUN_MODE", "all")
 
+    # Data retention
+    DATA_RETENTION_DAYS = int(os.getenv("DATA_RETENTION_DAYS", "30"))
+
     # Data sources config
     NEWS_SOURCES = {
         "cls": {
