@@ -1,5 +1,7 @@
+import time
 from datetime import datetime
 
+from config import Config
 from collectors import NewsCollector
 from core.analyzer import NewsAnalyzer
 from core.feishu_pusher import FeishuPusher
@@ -11,14 +13,14 @@ class NewsScheduler:
         self.analyzer = NewsAnalyzer()
         self.pusher = FeishuPusher()
 
-    def run(self):
+    def _tick(self) -> bool:
         now = datetime.now()
         print(f"\n{'='*50}")
-        print(f"[{now.strftime('%H:%M')}] 开始增量采集...")
+        print(f"[{now.strftime('%H:%M:%S')}] 开始增量采集...")
         print(f"{'='*50}")
 
         last_fetch = self.collector.get_last_fetch_time()
-        print(f"  上次采集时间: {last_fetch.strftime('%Y-%m-%d %H:%M')}")
+        print(f"  上次采集时间: {last_fetch.strftime('%Y-%m-%d %H:%M:%S')}")
 
         new_news = self.collector.collect_since(last_fetch)
         print(f"  新增 {len(new_news)} 条新闻")
@@ -40,3 +42,22 @@ class NewsScheduler:
             print("  无新新闻，跳过推送")
 
         print(f"  [完成] 本次采集")
+        return bool(new_news)
+
+    def run(self):
+        self._tick()
+
+    def run_loop(self, interval=None):
+        if interval is None:
+            interval = Config.FETCH_INTERVAL_SECONDS
+        print(f"\n  [循环模式] 间隔 {interval}s，按 Ctrl+C 停止")
+        while True:
+            try:
+                self._tick()
+            except KeyboardInterrupt:
+                print("\n  [停止] 用户中断")
+                break
+            except Exception as e:
+                print(f"  [错误] {e}")
+            print(f"\n  [等待] {interval} 秒后下一轮...")
+            time.sleep(interval)

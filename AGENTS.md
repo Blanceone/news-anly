@@ -9,7 +9,9 @@ All tokens and API keys are stored in `C:\Users\13979\Desktop\notes\apis.txt`. A
 ```bash
 pip install -r requirements.txt
 cp .env.example .env        # then edit with keys
-python main.py run           # 增量采集+分析+推送
+python main.py run           # 单次增量采集+分析+推送
+python main.py run --loop    # 持续循环采集（默认60秒间隔）
+python main.py run --loop -i 30  # 每30秒轮询
 python main.py init          # check config
 ```
 
@@ -55,7 +57,7 @@ All config lives in `config.py` + `.env` loaded via `python-dotenv`.
 
 | Source | Type | Status | Detail |
 |--------|------|--------|--------|
-| cls (财联社) | JSON API | ✅ incremental | Sign: SHA1→MD5 of sorted params. `last_time` set to `since` timestamp. |
+| cls (财联社) | JSON API | ✅ incremental | Sign: SHA1→MD5 of sorted params. `last_time` set to `since` timestamp. Client-side ctime filter. |
 | cninfo (巨潮资讯) | POST form | ✅ incremental + pagination | Sorted by `annDate desc`, client-side time filter with multi-page pull. |
 
 Adding a new data source requires:
@@ -66,8 +68,9 @@ Adding a new data source requires:
 ## CI / GitHub Actions
 
 Single workflow: `.github/workflows/collect.yml`
-- **Cron**: `*/30 * * * *` (every 30 min, all day, every day)
-- **Behavior**: incremental fetch from last recorded time → analyze unanalyzed → push to Feishu
+- **Cron**: `*/5 * * * *` (triggers every 5 min, GH Actions max)
+- **Loop**: inside job runs `--loop` mode with 60s interval, up to 6h per run
+- **Cache**: `news.db` cached between runs via `actions/cache`, preventing re-fetch/re-analysis
 - Secrets needed: `GEMINI_API_KEY`, `FEISHU_WEBHOOK_URL`, `STOCK_WATCHLIST` (as Variable or Secret)
 - Env vars written to `.env` in CI via `echo`
 

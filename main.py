@@ -8,9 +8,12 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 from core.scheduler import NewsScheduler
 
 
-def run():
+def run(loop=False, interval=None):
     s = NewsScheduler()
-    s.run()
+    if loop:
+        s.run_loop(interval)
+    else:
+        s.run()
 
 
 def run_init():
@@ -23,12 +26,15 @@ def run_init():
     print(f"自选股: {watchlist_status}")
     print(f"数据源: {len(Config.NEWS_SOURCES)} 个")
     print(f"数据保留: {Config.DATA_RETENTION_HOURS} 小时")
+    print(f"采集间隔: {Config.FETCH_INTERVAL_SECONDS} 秒")
     print("\n环境检查:")
     print(f"  Python: {sys.version}")
     print(f"  工作目录: {os.getcwd()}")
     print("\n使用方式:")
-    print("  python main.py run   # 增量采集+分析+推送")
-    print("  python main.py init  # 本检查")
+    print("  python main.py run              # 单次增量采集+分析+推送")
+    print("  python main.py run --loop       # 持续循环采集")
+    print("  python main.py run --loop -i 30 # 每30秒轮询一次")
+    print("  python main.py init             # 本检查")
 
 
 def _detect_provider():
@@ -46,9 +52,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="A股情报系统")
     parser.add_argument("mode", nargs="?", default="run",
                         choices=["run", "init"])
+    parser.add_argument("--loop", action="store_true", help="持续循环采集")
+    parser.add_argument("-i", "--interval", type=int, default=None, help="轮询间隔（秒）")
     args = parser.parse_args()
 
     if args.mode == "init":
         run_init()
     else:
-        run()
+        run(loop=args.loop, interval=args.interval)

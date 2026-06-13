@@ -22,6 +22,9 @@ class Config:
     # Data retention (hours)
     DATA_RETENTION_HOURS = int(os.getenv("DATA_RETENTION_HOURS", "72"))
 
+    # Fetch interval (seconds) — used in loop mode
+    FETCH_INTERVAL_SECONDS = int(os.getenv("FETCH_INTERVAL_SECONDS", "60"))
+
     # Data sources config
     NEWS_SOURCES = {
         "cls": {
