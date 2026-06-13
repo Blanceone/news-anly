@@ -40,7 +40,7 @@ class StockViewScreen(Screen):
         with Horizontal():
             with Vertical(classes="left-panel"):
                 yield Static("股票列表", classes="panel-title")
-                yield DataTable(id="stock-list")
+                yield DataTable(id="stock-list", cursor_type="row")
             with Vertical(classes="right-panel"):
                 yield Static("详情", classes="panel-title")
                 yield Static("请选择左侧股票查看详情", id="stock-detail")
@@ -83,11 +83,11 @@ class StockViewScreen(Screen):
             lines.extend([
                 f"[bold]{score.get('stock_name', '')} ({score.get('stock_code', '')})[/]",
                 "",
-                f"总分: {int(score.get('total_score', 0))}  "
-                f"事件: {int(score.get('event_score', 0))}  "
-                f"受益: {int(score.get('benefit_score', 0))}  "
-                f"市场: {int(score.get('market_score', 0))}",
-                f"事件数: {score.get('event_count', 0)}",
+                f"总分: {int(score.get('total_score', 0))} = "
+                f"事件{int(score.get('event_score', 0))}*30% + "
+                f"受益{int(score.get('benefit_score', 0))}*40% + "
+                f"市场{int(score.get('market_score', 0))}*30%",
+                f"触发事件数: {score.get('event_count', 0)}",
             ])
         else:
             lines.append("无评分数据")
@@ -95,16 +95,36 @@ class StockViewScreen(Screen):
         themes = detail.get("themes", [])
         if themes:
             level_map = {1: "一级", 2: "二级", 3: "三级"}
-            lines.extend(["", "[bold]关联主题:[/]"])
+            lines.extend(["", "[bold]受益逻辑(主题映射):[/]"])
             for t in themes:
                 lv = level_map.get(t.get("benefit_level"), "")
                 lines.append(f"  {t.get('theme_name', '')} [{lv}] {t.get('benefit_reason', '')}")
 
+        mkt = detail.get("market_confirmations", [])
+        if mkt:
+            lines.extend(["", "[bold]市场验证(板块):[/]"])
+            for m in mkt:
+                chg = m.get("sector_change", 0)
+                sign = "+" if (chg or 0) >= 0 else ""
+                lines.append(f"  {m.get('board_name', '')} {sign}{chg:.2f}% "
+                             f"验证分: {m.get('confirmation_score', 0)}")
+
         events = detail.get("events", [])
         if events:
-            lines.extend(["", "[bold]相关事件:[/]"])
-            for e in events[:10]:
+            lines.extend(["", "[bold]关联事件:[/]"])
+            for e in events[:8]:
                 ts = (e.get("created_at") or "")[11:19] if e.get("created_at") else ""
-                lines.append(f"  {ts} [{e.get('event_type', '')}] {(e.get('ai_summary', '') or '')[:60]}")
+                score_ev = e.get("event_score", 0) or 0
+                bscore = e.get("benefit_score", 0) or 0
+                reason = (e.get("match_reason") or "")[:30]
+                lines.append(
+                    f"  {ts} [{e.get('event_type', '')}] "
+                    f"事件{score_ev}分 受益{bscore}分"
+                )
+                if reason:
+                    lines.append(f"    -> {reason}")
+                summary = (e.get("ai_summary") or "")[:50]
+                if summary:
+                    lines.append(f"    {summary}")
 
         widget.update("\n".join(lines))

@@ -44,8 +44,9 @@ BOARD_KEYWORDS = {
 
 
 class MarketVerifier:
-    def __init__(self, db_path="news.db"):
-        self.db_path = db_path
+    def __init__(self, db_path=None):
+        from config import Config
+        self.db_path = db_path or Config.STOCKS_DB
         self.llm = LLMClient()
         self._init_table()
         self._board_cache = None
@@ -80,13 +81,68 @@ class MarketVerifier:
         now_ts = _time.time()
         if self._board_cache and (now_ts - self._board_cache_time) < 30:
             return self._board_cache
+        boards = self._ts_boards()
+        if not boards:
+            boards = self._ak_boards()
+        if boards:
+            self._board_cache = boards
+            self._board_cache_time = now_ts
+        return boards
+
+    def _ts_boards(self) -> list:
+        """Tushare：stock_basic(industry) + daily(pct_chg) -> 行业板块聚合"""
+        try:
+            import tushare as ts, config
+            pro = ts.pro_api(config.Config().TUSHARE_TOKEN)
+            import datetime
+            d = datetime.date.today()
+            while d.weekday() >= 5:
+                d -= datetime.timedelta(days=1)
+            tdate = d.strftime("%Y%m%d")
+            sb = pro.stock_basic(fields='ts_code,industry')
+            daily = pro.daily(trade_date=tdate)
+            chg_map = {}
+            vol_map = {}
+            for _, row in daily.iterrows():
+                code = str(row["ts_code"])
+                chg_map[code] = float(row.get("pct_chg", 0))
+                vol_map[code] = float(row.get("amount", 0)) if row.get("amount") else 0
+            ind_stocks = {}
+            for _, row in sb.iterrows():
+                ind = str(row.get("industry", "") or "").strip()
+                code = str(row.get("ts_code", ""))
+                if ind and code:
+                    ind_stocks.setdefault(ind, []).append(code)
+            boards = []
+            for ind, codes in ind_stocks.items():
+                changes, ups, downs, tot_vol = [], 0, 0, 0.0
+                for c in codes:
+                    ch = chg_map.get(c)
+                    if ch is not None:
+                        changes.append(ch)
+                        tot_vol += vol_map.get(c, 0)
+                        if ch > 0: ups += 1
+                        elif ch < 0: downs += 1
+                avg = round(sum(changes) / len(changes), 2) if changes else 0
+                boards.append({
+                    "name": ind,
+                    "change": avg,
+                    "up": ups,
+                    "down": downs,
+                    "volume": round(tot_vol / 1e8, 1),
+                })
+            return boards
+        except Exception as e:
+            print(f"  [市场验证] Tushare行业数据获取失败: {e}")
+            return []
+
+    def _ak_boards(self) -> list:
+        """AKShare补充：stock_board_industry_spot_em"""
         try:
             import akshare as ak
             df = ak.stock_board_industry_spot_em()
-            data = df.to_dict("records")
-            # Normalize column names (AKShare may vary across versions)
             normalized = []
-            for row in data:
+            for _, row in df.iterrows():
                 entry = {}
                 for k, v in row.items():
                     k = k.strip()
@@ -102,13 +158,8 @@ class MarketVerifier:
                         entry["down"] = int(v) if v else 0
                 if entry.get("name"):
                     normalized.append(entry)
-            self._board_cache = normalized
-            self._board_cache_time = now_ts
             return normalized
-        except ImportError:
-            return []
-        except Exception as e:
-            print(f"  [市场验证] 数据获取失败: {e}")
+        except Exception:
             return []
 
     def _resolve_board(self, industry: str, keywords: list) -> str:

@@ -44,6 +44,19 @@ SEED = {
         ("product", "光模块产品", "400G、800G、1.6T光模块"),
         ("product", "减速器产品", "RV减速器、谐波减速器"),
         ("product", "封装服务", "先进封装、SiP封装"),
+        # ── New themes ──
+        ("theme", "具身智能", "人形机器人、灵巧手、传感器、执行器"),
+        ("theme", "CPO/光通信", "CPO、共封装光学、硅光、光模块"),
+        # ── New industries ──
+        ("industry", "机器人关节", "执行器、灵巧手、空心杯电机"),
+        ("industry", "光伏", "光伏组件、逆变器、硅片"),
+        ("industry", "锂电池", "动力电池、储能电池、正负极"),
+        # ── New technologies ──
+        ("technology", "机器人灵巧手", "空心杯电机、精密传动"),
+        ("technology", "储能", "电池储能、液冷、PCS、逆变器"),
+        # ── New products ──
+        ("product", "机器人灵巧手产品", "灵巧手、末端执行器"),
+        ("product", "储能产品", "储能系统、逆变器"),
     ],
     "relations": [
         # Theme → Industry
@@ -68,6 +81,16 @@ SEED = {
         ("industry", "封测", "technology", "Chiplet", "CONTAINS", 90),
         ("industry", "封测", "technology", "HBM", "CONTAINS", 80),
         ("industry", "减速器", "technology", "Chiplet", "CONTAINS", 0),
+        # New theme → industry
+        ("theme", "具身智能", "industry", "机器人关节", "CONTAINS", 95),
+        ("theme", "具身智能", "industry", "减速器", "CONTAINS", 85),
+        ("theme", "CPO/光通信", "industry", "光模块", "CONTAINS", 95),
+        ("theme", "新能源", "industry", "光伏", "CONTAINS", 90),
+        ("theme", "新能源", "industry", "锂电池", "CONTAINS", 95),
+        # New industry → technology
+        ("industry", "机器人关节", "technology", "机器人灵巧手", "CONTAINS", 95),
+        ("industry", "光伏", "technology", "储能", "CONTAINS", 85),
+        ("industry", "锂电池", "technology", "储能", "CONTAINS", 90),
         # Technology → Product
         ("technology", "Chiplet", "product", "封装服务", "ENABLE", 95),
         ("technology", "HBM", "product", "GPU芯片", "ENABLE", 90),
@@ -90,9 +113,13 @@ SEED = {
         ("product", "封装服务", "stock", "002185", "BENEFIT", 70),
         ("product", "减速器产品", "stock", "002031", "BENEFIT", 95),
         ("product", "减速器产品", "stock", "688017", "BENEFIT", 90),
+        ("product", "封装服务", "stock", "603005", "BENEFIT", 85),
+        ("product", "机器人灵巧手产品", "stock", "603728", "BENEFIT", 95),
+        ("product", "机器人灵巧手产品", "stock", "002050", "BENEFIT", 90),
+        ("product", "储能产品", "stock", "300274", "BENEFIT", 95),
+        ("product", "储能产品", "stock", "300750", "BENEFIT", 85),
     ],
     "direct_benefit": [
-        # Direct theme → stock links (for simpler 1-hop matching)
         ("theme", "人工智能", "stock", "002230", 95, "AI语音龙头"),
         ("theme", "人工智能", "stock", "002415", 90, "AI视觉龙头"),
         ("theme", "人工智能", "stock", "300496", 80, "AI操作系统"),
@@ -120,15 +147,29 @@ SEED = {
         ("theme", "新能源", "stock", "300750", 95, "锂电池龙头"),
         ("theme", "新能源", "stock", "601012", 90, "光伏龙头"),
         ("theme", "新能源", "stock", "002459", 85, "光伏"),
+        ("theme", "新能源", "stock", "300274", 85, "储能逆变器"),
         ("theme", "低空经济", "stock", "002097", 85, "无人机"),
         ("theme", "低空经济", "stock", "300696", 80, "空管系统"),
+        ("theme", "低空经济", "stock", "600038", 85, "直升机/eVTOL"),
+        ("theme", "先进封装", "stock", "600584", 95, "封装龙头"),
+        ("theme", "先进封装", "stock", "002156", 92, "AMD封装链"),
+        ("theme", "先进封装", "stock", "002185", 75, "先进封装"),
+        ("theme", "先进封装", "stock", "603005", 90, "晶圆级封装"),
+        ("theme", "具身智能", "stock", "603728", 95, "空心杯电机/灵巧手"),
+        ("theme", "具身智能", "stock", "002050", 90, "机器人关节"),
+        ("theme", "具身智能", "stock", "601689", 90, "机器人执行器"),
+        ("theme", "具身智能", "stock", "688017", 85, "谐波减速器"),
+        ("theme", "CPO/光通信", "stock", "300308", 95, "光模块龙头"),
+        ("theme", "CPO/光通信", "stock", "300502", 92, "光模块/硅光"),
+        ("theme", "CPO/光通信", "stock", "300394", 85, "光器件/CPO"),
     ],
 }
 
 
 class KnowledgeGraph:
-    def __init__(self, db_path="news.db"):
-        self.db_path = db_path
+    def __init__(self, db_path=None):
+        from config import Config
+        self.db_path = db_path or Config.STOCKS_DB
         self._init_table()
         self._seed()
 
@@ -170,9 +211,6 @@ class KnowledgeGraph:
 
     def _seed(self):
         with sqlite3.connect(self.db_path) as conn:
-            count = conn.execute("SELECT COUNT(*) FROM kg_entity").fetchone()[0]
-            if count > 0:
-                return
             for etype, name, desc in SEED["entities"]:
                 conn.execute("INSERT OR IGNORE INTO kg_entity (entity_type, name, description) VALUES (?, ?, ?)",
                              (etype, name, desc))
@@ -317,5 +355,9 @@ def _stock_name(code):
         "300759": "康龙化成",
         "300750": "宁德时代", "601012": "隆基绿能", "002459": "晶澳科技",
         "002097": "山河智能", "300696": "爱乐达",
+        "603005": "晶方科技", "300274": "阳光电源",
+        "002050": "三花智控", "603728": "鸣志电器",
+        "600038": "中直股份", "002023": "海特高新",
+        "300424": "航新科技",
     }
     return names.get(code, code)

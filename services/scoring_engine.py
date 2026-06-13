@@ -13,8 +13,9 @@ from datetime import datetime
 
 
 class ScoringEngine:
-    def __init__(self, db_path="news.db"):
-        self.db_path = db_path
+    def __init__(self, db_path=None):
+        from config import Config
+        self.db_path = db_path or Config.STOCKS_DB
         self._init_table()
 
     def _init_table(self):
@@ -63,21 +64,51 @@ class ScoringEngine:
         return results
 
     def _load_event_stocks(self, since_ts) -> list:
+        from config import Config
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("""
                 SELECT
                     es.stock_code, es.stock_name,
                     es.benefit_score, es.benefit_level,
-                    e.event_score, e.event_type, e.importance,
-                    e.sentiment, e.ai_summary, e.event_id,
+                    es.event_id,
                     COALESCE(mc.confirmation_score, 0) as market_score
                 FROM event_stock_mapping es
-                JOIN event_analysis e ON es.event_id = e.event_id
                 LEFT JOIN market_confirmation mc ON es.event_id = mc.event_id
-                WHERE e.created_at > datetime(?, 'unixepoch')
-            """, (since_ts,)).fetchall()
-            return [dict(r) for r in rows]
+            """).fetchall()
+        event_ids = [r["event_id"] for r in rows]
+        event_map = {}
+        if event_ids:
+            placeholders = ",".join("?" for _ in event_ids)
+            with sqlite3.connect(Config.NEWS_DB) as econn:
+                econn.row_factory = sqlite3.Row
+                erows = econn.execute(f"""
+                    SELECT event_id, event_score, event_type, importance,
+                           sentiment, ai_summary, created_at
+                    FROM event_analysis
+                    WHERE event_id IN ({placeholders})
+                      AND created_at > datetime(?, 'unixepoch')
+                """, (*event_ids, since_ts)).fetchall()
+                event_map = {r["event_id"]: dict(r) for r in erows}
+        result = []
+        for r in rows:
+            e = event_map.get(r["event_id"])
+            if e is None:
+                continue
+            result.append({
+                "stock_code": r["stock_code"],
+                "stock_name": r["stock_name"],
+                "benefit_score": r["benefit_score"],
+                "benefit_level": r["benefit_level"],
+                "event_score": e["event_score"],
+                "event_type": e["event_type"],
+                "importance": e["importance"],
+                "sentiment": e["sentiment"],
+                "ai_summary": e["ai_summary"],
+                "event_id": r["event_id"],
+                "market_score": r["market_score"],
+            })
+        return result
 
     def _aggregate(self, rows: list) -> dict:
         stocks = defaultdict(lambda: {

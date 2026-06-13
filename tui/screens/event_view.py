@@ -40,7 +40,7 @@ class EventViewScreen(Screen):
         with Horizontal():
             with Vertical(classes="left-panel"):
                 yield Static("事件列表", classes="panel-title")
-                yield DataTable(id="event-list")
+                yield DataTable(id="event-list", cursor_type="row")
             with Vertical(classes="right-panel"):
                 yield Static("影响股票", classes="panel-title")
                 yield Static("请选择左侧事件查看详情", id="event-detail")

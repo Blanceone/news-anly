@@ -28,6 +28,10 @@ class Config:
     # Fetch interval (seconds) — used in loop mode
     FETCH_INTERVAL_SECONDS = int(os.getenv("FETCH_INTERVAL_SECONDS", "5"))
 
+    # Database paths
+    NEWS_DB = "news.db"
+    STOCKS_DB = "stocks.db"
+
     # Data sources config
     NEWS_SOURCES = {
         "cls": {

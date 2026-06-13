@@ -1,3 +1,4 @@
+import json
 import time
 from datetime import datetime
 
@@ -35,11 +36,12 @@ class NewsScheduler:
         new_news = self.collector.collect_since(last_fetch)
         print(f"  新增 {len(new_news)} 条新闻")
 
-        unanalyzed = self.collector.get_unanalyzed_news(limit=50)
-        if unanalyzed:
-            print(f"  待分析 {len(unanalyzed)} 条新闻")
-            for item in unanalyzed:
+        # 采集后立刻分析每一条新新闻
+        analyzed_ids = []
+        for item in new_news:
+            try:
                 event = self.event_service.process_news_item(item)
+                analyzed_ids.append(item["id"])
                 event_id = self._get_last_event_id()
                 if event_id:
                     self.stock_service.process_event_stocks(event_id, event)
@@ -53,7 +55,11 @@ class NewsScheduler:
                         event.get("industry", ""),
                         event.get("keywords", []),
                     )
-            self.collector.mark_analyzed([item["id"] for item in unanalyzed])
+            except Exception as e:
+                print(f"  [分析失败] {item.get('title', '')[:30]}: {e}")
+        if analyzed_ids:
+            self.collector.mark_analyzed(analyzed_ids)
+            print(f"  已分析 {len(analyzed_ids)} 条新闻")
         else:
             print("  无待分析新闻")
 
@@ -76,8 +82,9 @@ class NewsScheduler:
 
     def _get_last_event_id(self):
         import sqlite3
+        from config import Config
         try:
-            with sqlite3.connect("news.db") as conn:
+            with sqlite3.connect(Config.NEWS_DB) as conn:
                 row = conn.execute("SELECT MAX(event_id) FROM event_analysis").fetchone()
                 return row[0]
         except Exception:
@@ -87,8 +94,9 @@ class NewsScheduler:
         if not stocks:
             return
         import sqlite3
+        from config import Config
         benefit_scores = {1: 95, 2: 80, 3: 60}
-        with sqlite3.connect("news.db") as conn:
+        with sqlite3.connect(Config.STOCKS_DB) as conn:
             for stock in stocks[:10]:
                 level = 1 if stock["score"] >= 85 else (2 if stock["score"] >= 60 else 3)
                 conn.execute("""
@@ -100,6 +108,74 @@ class NewsScheduler:
                       f"图谱推理(路径{stock['path_count']}条,最大权重{stock['score']})"))
             conn.commit()
 
+    def _repair_stock_mappings(self):
+        """修补已分析但缺少股票映射的事件"""
+        import sqlite3
+        from config import Config
+        with sqlite3.connect(Config.STOCKS_DB) as sconn:
+            mapped = {r[0] for r in sconn.execute("SELECT DISTINCT event_id FROM event_stock_mapping").fetchall()}
+        with sqlite3.connect(Config.NEWS_DB) as nconn:
+            nconn.row_factory = sqlite3.Row
+            rows = nconn.execute("""
+                SELECT e.*, n.title, n.content
+                FROM event_analysis e
+                JOIN news n ON e.source_id = n.id
+                ORDER BY e.event_id
+            """).fetchall()
+        unmapped = [dict(r) for r in rows if r["event_id"] not in mapped]
+        if not unmapped:
+            return
+        print(f"  [修复] 发现 {len(unmapped)} 个事件缺少股票映射，正在处理...")
+        for i, event in enumerate(unmapped, 1):
+            try:
+                eid = event["event_id"]
+                keywords = json.loads(event.get("keywords_json") or "[]")
+                industry = event.get("industry") or ""
+                evt_dict = {"keywords": keywords, "industry": industry}
+                self.stock_service.process_event_stocks(eid, evt_dict)
+                kg_result = self.knowledge_graph.reason(keywords, industry)
+                self._save_kg_result(eid, kg_result)
+                self.market_verifier.verify_event(eid, industry, keywords)
+                if i % 20 == 0:
+                    print(f"  [修复] {i}/{len(unmapped)}")
+            except Exception as e:
+                print(f"  [修复失败] event_id={event['event_id']}: {e}")
+        self.scoring_engine.calculate(hours=72)
+        print(f"  [修复] 完成 {len(unmapped)} 个事件")
+
+    def _analyze_backlog(self):
+        """启动时检查并处理所有未分析新闻"""
+        backlog = self.collector.get_unanalyzed_news(limit=200)
+        if not backlog:
+            self._repair_stock_mappings()
+            return
+        print(f"  [启动] 发现 {len(backlog)} 条未分析新闻，开始分析...")
+        analyzed_ids = []
+        for item in backlog:
+            try:
+                event = self.event_service.process_news_item(item)
+                analyzed_ids.append(item["id"])
+                event_id = self._get_last_event_id()
+                if event_id:
+                    self.stock_service.process_event_stocks(event_id, event)
+                    kg_result = self.knowledge_graph.reason(
+                        event.get("keywords", []),
+                        event.get("industry", ""),
+                    )
+                    self._save_kg_result(event_id, kg_result)
+                    self.market_verifier.verify_event(
+                        event_id,
+                        event.get("industry", ""),
+                        event.get("keywords", []),
+                    )
+            except Exception as e:
+                print(f"  [分析失败] {item.get('title', '')[:30]}: {e}")
+        if analyzed_ids:
+            self.collector.mark_analyzed(analyzed_ids)
+            self.scoring_engine.calculate(hours=72)
+            print(f"  [启动] 已完成 {len(analyzed_ids)} 条分析")
+        self._repair_stock_mappings()
+
     def _print_ranking(self, stocks: list):
         print(f"\n  ── TOP 推荐榜 ──")
         print(f"  {'#':3s} {'代码':7s} {'名称':7s} {'总分':5s} {'事件':5s} {'受益':5s} {'市场':5s}")
@@ -109,11 +185,13 @@ class NewsScheduler:
         print()
 
     def run(self):
+        self._analyze_backlog()
         self._tick()
 
     def run_loop(self, interval=None):
         if interval is None:
             interval = Config.FETCH_INTERVAL_SECONDS
+        self._analyze_backlog()
         print(f"\n  [循环模式] 间隔 {interval}s，按 Ctrl+C 停止")
         while True:
             try:

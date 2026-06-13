@@ -45,8 +45,9 @@ def run_init():
 
 def _kg_count():
     import sqlite3
+    from config import Config
     try:
-        with sqlite3.connect("news.db") as conn:
+        with sqlite3.connect(Config.STOCKS_DB) as conn:
             return conn.execute("SELECT COUNT(*) FROM kg_entity").fetchone()[0]
     except Exception:
         return 0
@@ -54,8 +55,9 @@ def _kg_count():
 
 def _score_count():
     import sqlite3
+    from config import Config
     try:
-        with sqlite3.connect("news.db") as conn:
+        with sqlite3.connect(Config.STOCKS_DB) as conn:
             return conn.execute("SELECT COUNT(DISTINCT stock_code) FROM stock_score").fetchone()[0]
     except Exception:
         return 0

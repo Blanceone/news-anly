@@ -15,23 +15,25 @@
 │   └── cninfo.py           # 巨潮资讯 (POST分页，增量拉取)
 ├── services/               # 业务服务层
 │   ├── event_service.py    # AI事件识别 (LLM结构化JSON)
-│   ├── stock_service.py    # 股票关联映射 (5主题31只受益股)
-│   ├── knowledge_graph.py  # 知识图谱 (28实体 + BFS推理引擎)
+│   ├── stock_service.py    # 股票关联映射 (10主题57只受益股)
+│   ├── knowledge_graph.py  # 知识图谱 (37实体 + BFS推理引擎)
 │   ├── scoring_engine.py   # 综合评分 (事件×30% + 受益×40% + 市场×30%)
-│   └── market_verifier.py  # 市场验证 (AKShare行情 → MarketScore)
+│   └── market_verifier.py  # 市场验证 (Tushare主力+AKShare补充)
 ├── core/
+│   ├── db_init.py          # 双数据库初始化 (news.db + stocks.db)
 │   ├── scheduler.py        # 采集→分析→评分 全链路编排
 │   ├── analyzer.py         # LLM分析 + keyword fallback
 │   └── feishu_pusher.py    # 飞书交互式卡片推送
 ├── tui/                    # Textual TUI终端
 │   ├── app.py              # 主应用 (顶部导航1-4 + 时钟)
-│   ├── db.py               # DB查询层
+│   ├── db.py               # DB查询层 (跨库合并)
 │   └── screens/            # 4个屏幕
 │       ├── dashboard.py    # 看板: 统计栏 + 新闻流 + 推荐榜 + 题材
-│       ├── theme_view.py   # 主题: 列表 → 关联股票详情
+│       ├── theme_view.py   # 板块: 129个行业/概念 → 成分股详情
 │       ├── stock_view.py   # 股票: 评分排行 → 事件/主题详情
 │       └── event_view.py   # 事件: 列表 → 影响股票
-└── prd/                    # 产品需求文档 (7份)
+├── prd/                    # 产品需求文档 (7份)
+└── ── news.db + stocks.db  # 双数据库分离
 ```
 
 ## 快速开始
@@ -39,13 +41,15 @@
 ```bash
 # 1. 安装依赖
 pip install -r requirements.txt
-pip install textual   # TUI终端
-pip install akshare   # 行情数据
+pip install textual        # TUI终端
+pip install akshare        # 板块行情补充
+pip install tushare        # 行业分类 + 日线行情
 
 # 2. 配置环境变量
 cp .env.example .env
 # 编辑 .env，填入 API Keys
-# 支持: Gemini (免费) / DeepSeek / OpenAI 兼容
+# AI: Gemini (免费) / DeepSeek / OpenAI 兼容
+# Tushare token 用于行业/日线数据
 
 # 3. 运行
 python main.py run              # 单次增量采集+分析+评分
@@ -71,21 +75,28 @@ Dashboard 每10秒自动刷新，其余页面每30秒自动刷新。
 ## 系统架构
 
 ```
-                   ┌──────────────────────────┐
-                   │     Textual TUI 终端       │
-                   │  看板 | 主题 | 股票 | 事件   │
-                   └──────────┬───────────────┘
-                              │
-┌─────────┐  ┌────────┐  ┌───┴────────┐  ┌──────┐  ┌──────────┐
-│ 财联社    │  │ 巨潮    │  │ 事件识别    │  │ 知识  │  │ 综合评分   │
-│ 电报      │→│ 资讯    │→│ (LLM)     │→│ 图谱  │→│ +推荐榜   │
-└─────────┘  └────────┘  └────────────┘  └──────┘  └──────────┘
-                              │
-                              ▼
-                         ┌──────────┐
-                         │ 市场验证   │
-                         │ (AKShare) │
-                         └──────────┘
+                    ┌─────────────────────────────────┐
+                    │        Textual TUI 终端           │
+                    │  看板 | 板块 | 股票 | 事件          │
+                    └──────────┬──────────────────────┘
+                               │
+ ┌─────────┐  ┌────────┐  ┌───┴────────┐  ┌──────┐  ┌──────────┐
+ │ 财联社    │  │ 巨潮    │  │ 事件识别    │  │ 知识  │  │ 综合评分   │
+ │ 电报      │→│ 资讯    │→│ (LLM)     │→│ 图谱  │→│ +推荐榜   │
+ └─────────┘  └────────┘  └───────┬────┘  └──┬───┘  └────┬─────┘
+                                  │          │            │
+                                  ▼          ▼            ▼
+                            ┌──────────────────────────────┐
+                            │    news.db  |  stocks.db      │
+                            │  (新闻/事件) | (股票/评分/KG)   │
+                            └──────────────────────────────┘
+                                         │
+                          ┌──────────────┼──────────────┐
+                          ▼              ▼              ▼
+                    ┌──────────┐  ┌──────────┐  ┌──────────┐
+                    │ Tushare  │  │ AKShare  │  │ 飞书推送   │
+                    │行业+日线  │  │板块行情   │  │ 卡片消息   │
+                    └──────────┘  └──────────┘  └──────────┘
 ```
 
 ## 核心功能
@@ -100,13 +111,18 @@ Dashboard 每10秒自动刷新，其余页面每30秒自动刷新。
 - 8大事件类型：ORDER / EARNINGS / TECHNOLOGY / POLICY / MNA / CAPITAL / RISK / OTHER
 - JSON 输出校验 + 3次重试
 
-### 3. 知识图谱推理
+### 3. 股票关联映射
+- 10大主题 57 只受益股：AI/算力/半导体/机器人/创新药/先进封装/具身智能/低空经济/新能源/CPO
+- 关键词+行业自动匹配事件与主题
+
+### 4. 知识图谱推理
 - 5种实体：Theme → Industry → Technology → Product → Stock
 - 4种关系：CONTAINS / DEPENDS / SUPPLY / BENEFIT
 - BFS 多级推理（最大深度4层，权重阈值≥0.05剪枝）
-- 初始覆盖：AI/算力/半导体/先进封装/光模块/机器人/低空经济/创新药/新能源 九大主题
+- 37实体 / 53关系 / 42直连受益
+- 初始覆盖：AI/算力/半导体/先进封装/具身智能/低空经济/新能源/CPO/创新药 十大主题
 
-### 4. 综合评分
+### 5. 综合评分
 ```
 总分 = 事件强度×30% + 受益程度×40% + 市场验证×30%
 ```
@@ -114,11 +130,25 @@ Dashboard 每10秒自动刷新，其余页面每30秒自动刷新。
 - **BenefitScore**: 一级=95 / 二级=80 / 三级=60
 - **MarketScore**: 板块涨跌幅+涨跌比+成交额 (0-100)
 
-### 5. 市场验证
+### 6. 市场验证
 - 交易时段（工作日 9:25-15:00）自动运行
-- AKShare 实时板块行情 → 行业映射 → 涨跌幅/成交额/涨跌比评分
+- **Tushare 主力**: `stock_basic.industry` 110个行业 + `daily.pct_chg` 聚合
+- **AKShare 补充**: 实时行业板块 / 概念板块行情
+- 涨跌幅/成交额/涨跌比综合评分
 
-### 6. 飞书推送
+### 7. 双数据库架构
+- **news.db**: news / reports / event_analysis
+- **stocks.db**: stock_basic / theme_stock_mapping / event_stock_mapping / market_confirmation / stock_score / kg_* / sector_cache
+- 跨库 JOIN 在 Python 应用层合并
+
+### 8. 采集即分析
+- 采集后立即逐条全链路 AI 分析：事件识别 → 股票匹配 → 图谱推理 → 市场验证 → 评分
+- 启动自动处理积压：未分析新闻 + 缺少股票映射的事件
+
+### 9. 板块视图
+- Tushare 110 行业 + KG 主题 + AKShare 概念 + 事件行业 = 129 板块聚合
+
+### 10. 飞书推送
 - 交互式 JSON 消息卡片
 - 新闻快讯 + 每日分析报告
 
@@ -143,6 +173,7 @@ Dashboard 每10秒自动刷新，其余页面每30秒自动刷新。
 
 | 变量 | 说明 |
 |------|------|
+| `TUSHARE_TOKEN` | Tushare 数据平台 Token（行业/日线数据） |
 | `GEMINI_API_KEY` | Google Gemini API Key（免费，推荐首选） |
 | `DEEPSEEK_API_KEY` | DeepSeek API Key（极低成本） |
 | `OPENAI_API_KEY` | OpenAI 兼容接口 Key |
@@ -156,10 +187,11 @@ Dashboard 每10秒自动刷新，其余页面每30秒自动刷新。
 - **语言**: Python 3.10+
 - **采集**: requests, beautifulsoup4
 - **AI**: google-genai, openai (兼容 DeepSeek/通义千问等)
-- **行情**: AKShare
+- **行情**: Tushare (主力) + AKShare (补充)
 - **TUI**: Textual 8.x
-- **数据库**: SQLite
+- **数据库**: SQLite (双库: news.db + stocks.db)
 - **推送**: 飞书 Webhook
+- **配置**: python-dotenv
 
 ## 开发状态
 
@@ -167,9 +199,9 @@ Dashboard 每10秒自动刷新，其余页面每30秒自动刷新。
 |-------|------|------|
 | 1 | 数据流打通（采集+去重+入库） | ✅ |
 | 2 | 事件识别引擎（8大类 + LLM抽取） | ✅ |
-| 3 | 股票关联V1（5主题31只受益股） | ✅ |
-| 4 | 知识图谱V1（28实体 + BFS推理） | ✅ |
-| 5 | 评分系统（事件×40% + 受益×60%） | ✅ |
-| 6 | 市场验证引擎（AKShare行情评分） | ✅ |
-| 7 | TUI终端（Dashboard/Theme/Stock/Event） | ✅ |
+| 3 | 股票关联V2（10主题57只受益股） | ✅ |
+| 4 | 知识图谱V2（37实体 + BFS推理） | ✅ |
+| 5 | 评分系统V2（事件×30% + 受益×40% + 市场×30%） | ✅ |
+| 6 | 市场验证引擎（Tushare主力 + AKShare补充） | ✅ |
+| 7 | TUI终端（双库/板块视图/启动分析/自动修复） | ✅ |
 | 8 | 历史回测 | ⬜ |

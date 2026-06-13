@@ -29,55 +29,71 @@ class ThemeViewScreen(Screen):
     DataTable {
         height: 1fr;
     }
-    #theme-detail {
-        height: 1fr;
-    }
     """
 
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal():
             with Vertical(classes="left-panel"):
-                yield Static("主题列表", classes="panel-title")
-                yield DataTable(id="theme-list")
+                yield Static("行业板块", classes="panel-title")
+                yield DataTable(id="sector-list", cursor_type="row")
             with Vertical(classes="right-panel"):
-                yield Static("关联股票", classes="panel-title")
-                yield DataTable(id="theme-stocks")
+                yield Static("成分股", classes="panel-title")
+                yield DataTable(id="sector-stocks", cursor_type="row")
         yield Footer()
 
     def on_mount(self):
         self.db = TuiDB()
-        self.query_one("#theme-list", DataTable).add_columns("主题", "关联股票")
-        self.query_one("#theme-stocks", DataTable).add_columns("代码", "名称", "受益等级", "原因")
+        self.query_one("#sector-list", DataTable).add_columns("板块", "涨跌幅", "上涨", "下跌", "成交额(亿)")
+        self.query_one("#sector-stocks", DataTable).add_columns("代码", "名称", "涨跌幅")
         self._refresh()
         self.set_interval(30, self._refresh)
 
     def _refresh(self):
-        table = self.query_one("#theme-list", DataTable)
+        table = self.query_one("#sector-list", DataTable)
         table.clear()
-        self.themes = self.db.hot_themes()
-        for t in self.themes:
-            table.add_row(t.get("theme_name", ""), str(t.get("stock_count", 0)))
+        self.sectors = self.db.all_sectors()
+        if not self.sectors:
+            # Fallback: event-based hot themes (non-trading hours)
+            fallback = self.db.hot_themes()
+            for t in fallback:
+                table.add_row(t.get("theme_name", ""), "--", "--", "--", "--")
+            if not fallback:
+                table.add_row("(非交易时段，暂无实时行情)", "", "", "", "")
+            return
+        self.sectors.sort(key=lambda s: -s.get("change", 0))
+        for s in self.sectors:
+            chg = s.get("change", 0)
+            display = f"{chg:+.2f}%" if isinstance(chg, (int, float)) else str(chg)
+            table.add_row(
+                s.get("name", ""),
+                display,
+                str(s.get("up", 0)),
+                str(s.get("down", 0)),
+                str(s.get("volume", 0)),
+            )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected):
-        if event.data_table.id == "theme-list":
+        if event.data_table.id == "sector-list":
             idx = event.cursor_row
-            if idx is not None and 0 <= idx < len(self.themes):
-                theme = self.themes[idx]
-                self._show_theme_stocks(theme["theme_key"])
+            if idx is not None and 0 <= idx < len(self.sectors):
+                sector = self.sectors[idx]
+                self._show_sector_stocks(sector["name"])
 
-    def _show_theme_stocks(self, theme_key):
-        table = self.query_one("#theme-stocks", DataTable)
+    def _show_sector_stocks(self, sector_name):
+        table = self.query_one("#sector-stocks", DataTable)
         table.clear()
-        stocks = self.db.theme_stocks(theme_key)
-        level_map = {1: "一级", 2: "二级", 3: "三级"}
-        for s in stocks:
-            lv = level_map.get(s.get("benefit_level"), str(s.get("benefit_level", "")))
+        stocks = self.db.sector_stocks(sector_name)
+        if not stocks:
+            table.add_row("(数据不可用或非交易时段)", "", "")
+            return
+        # Sort by change descending
+        stocks.sort(key=lambda s: -s.get("change", 0))
+        for s in stocks[:30]:
+            chg = s.get("change", 0)
+            display = f"{chg:+.2f}%" if isinstance(chg, (int, float)) else str(chg)
             table.add_row(
                 s.get("stock_code", ""),
                 s.get("stock_name", ""),
-                lv,
-                (s.get("benefit_reason") or "")[:40],
+                display,
             )
-        if not stocks:
-            table.add_row("--", "no data", "", "")

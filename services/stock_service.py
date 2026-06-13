@@ -71,12 +71,69 @@ INITIAL_THEMES = {
             ("002821", "凯莱英", 2, "CDMO"),
         ],
     },
+    "先进封装": {
+        "name": "先进封装",
+        "keywords": ["先进封装", "Chiplet", "HBM", "SiP", "3D封装", "封装"],
+        "stocks": [
+            ("600584", "长电科技", 1, "封装龙头"),
+            ("002156", "通富微电", 1, "AMD封装链"),
+            ("002185", "华天科技", 2, "先进封装"),
+            ("603005", "晶方科技", 1, "晶圆级封装"),
+            ("688072", "拓荆科技", 2, "薄膜沉积/先进封装设备"),
+        ],
+    },
+    "具身智能": {
+        "name": "具身智能",
+        "keywords": ["具身智能", "人形机器人", "灵巧手", "传感器", "执行器"],
+        "stocks": [
+            ("601689", "拓普集团", 1, "机器人执行器"),
+            ("002050", "三花智控", 1, "机器人关节"),
+            ("603728", "鸣志电器", 1, "空心杯电机/灵巧手"),
+            ("688017", "绿的谐波", 1, "谐波减速器"),
+            ("300124", "汇川技术", 2, "伺服驱动"),
+            ("688160", "步科股份", 2, "机器人控制系统"),
+        ],
+    },
+    "低空经济": {
+        "name": "低空经济",
+        "keywords": ["低空经济", "无人机", "eVTOL", "空管", "飞行汽车"],
+        "stocks": [
+            ("002097", "山河智能", 1, "无人机"),
+            ("300696", "爱乐达", 1, "空管系统"),
+            ("600038", "中直股份", 1, "直升机/eVTOL"),
+            ("002023", "海特高新", 2, "飞行模拟/维修"),
+            ("300424", "航新科技", 2, "航空保障"),
+        ],
+    },
+    "新能源": {
+        "name": "新能源",
+        "keywords": ["新能源", "锂电池", "光伏", "储能", "风电", "新能源汽车"],
+        "stocks": [
+            ("300750", "宁德时代", 1, "锂电池龙头"),
+            ("601012", "隆基绿能", 1, "光伏龙头"),
+            ("002459", "晶澳科技", 1, "光伏组件"),
+            ("300274", "阳光电源", 1, "逆变器/储能"),
+            ("002129", "中环股份", 2, "光伏硅片"),
+        ],
+    },
+    "CPO": {
+        "name": "CPO/光通信",
+        "keywords": ["CPO", "光通信", "光模块", "硅光", "1.6T"],
+        "stocks": [
+            ("300308", "中际旭创", 1, "光模块龙头/CPO"),
+            ("300502", "新易盛", 1, "光模块/硅光"),
+            ("300394", "天孚通信", 1, "光器件/CPO"),
+            ("688205", "德科立", 2, "光模块/CPO"),
+            ("301165", "锐捷网络", 2, "光通信设备"),
+        ],
+    },
 }
 
 
 class StockService:
-    def __init__(self, db_path="news.db"):
-        self.db_path = db_path
+    def __init__(self, db_path=None):
+        from config import Config
+        self.db_path = db_path or Config.STOCKS_DB
         self._init_table()
         self._seed_themes()
 
@@ -180,7 +237,7 @@ class StockService:
             conn.commit()
 
     def get_top_stocks(self, hours=24, limit=20) -> list:
-        """获取TOP N 受益股评分"""
+        from config import Config
         since = (datetime.now().timestamp() - hours * 3600)
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -189,28 +246,97 @@ class StockService:
                     es.stock_code,
                     es.stock_name,
                     AVG(es.benefit_score) as avg_benefit,
-                    AVG(e.event_score) as avg_event,
-                    COUNT(DISTINCT e.event_id) as event_count,
-                    GROUP_CONCAT(DISTINCT e.event_type) as event_types
+                    es.event_id
                 FROM event_stock_mapping es
-                JOIN event_analysis e ON es.event_id = e.event_id
-                WHERE e.created_at > datetime(?, 'unixepoch')
-                GROUP BY es.stock_code, es.stock_name
-                ORDER BY avg_benefit DESC, avg_event DESC
-                LIMIT ?
-            """, (since, limit)).fetchall()
-            return [dict(r) for r in rows]
+                GROUP BY es.stock_code, es.stock_name, es.event_id
+            """).fetchall()
+        event_ids = list({r["event_id"] for r in rows})
+        event_map = {}
+        if event_ids:
+            placeholders = ",".join("?" for _ in event_ids)
+            with sqlite3.connect(Config.NEWS_DB) as econn:
+                econn.row_factory = sqlite3.Row
+                erows = econn.execute(f"""
+                    SELECT event_id, event_score, event_type, created_at
+                    FROM event_analysis
+                    WHERE event_id IN ({placeholders})
+                      AND created_at > datetime(?, 'unixepoch')
+                """, (*event_ids, since)).fetchall()
+                event_map = {r["event_id"]: dict(r) for r in erows}
+        stock_agg = {}
+        for r in rows:
+            e = event_map.get(r["event_id"])
+            if e is None:
+                continue
+            code = r["stock_code"]
+            if code not in stock_agg:
+                stock_agg[code] = {
+                    "stock_code": code,
+                    "stock_name": r["stock_name"],
+                    "benefit_scores": [],
+                    "event_scores": [],
+                    "event_types": set(),
+                    "event_ids": set(),
+                }
+            sa = stock_agg[code]
+            sa["benefit_scores"].append(r["avg_benefit"])
+            sa["event_scores"].append(e["event_score"] or 0)
+            if e["event_type"]:
+                sa["event_types"].add(e["event_type"])
+            sa["event_ids"].add(e["event_id"])
+        result = []
+        for code, sa in stock_agg.items():
+            result.append({
+                "stock_code": code,
+                "stock_name": sa["stock_name"],
+                "avg_benefit": sum(sa["benefit_scores"]) / len(sa["benefit_scores"]),
+                "avg_event": sum(sa["event_scores"]) / len(sa["event_scores"]) if sa["event_scores"] else 0,
+                "event_count": len(sa["event_ids"]),
+                "event_types": ",".join(sorted(sa["event_types"])),
+            })
+        result.sort(key=lambda x: (-x["avg_benefit"], -x["avg_event"]))
+        return result[:limit]
 
     def get_stock_events(self, stock_code: str, hours=72) -> list:
+        from config import Config
+        since = (datetime.now().timestamp() - hours * 3600)
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("""
-                SELECT e.event_type, e.industry, e.sentiment, e.importance,
-                       e.event_score, e.ai_summary, e.created_at,
-                       es.benefit_level, es.benefit_score, es.match_reason
+                SELECT es.event_id, es.benefit_level, es.benefit_score, es.match_reason
                 FROM event_stock_mapping es
-                JOIN event_analysis e ON es.event_id = e.event_id
-                WHERE es.stock_code=? AND e.created_at > datetime(?, 'unixepoch')
-                ORDER BY e.event_score DESC
-            """, (stock_code, (datetime.now().timestamp() - hours * 3600))).fetchall()
-            return [dict(r) for r in rows]
+                WHERE es.stock_code=?
+            """, (stock_code,)).fetchall()
+        event_ids = [r["event_id"] for r in rows]
+        event_map = {}
+        if event_ids:
+            placeholders = ",".join("?" for _ in event_ids)
+            with sqlite3.connect(Config.NEWS_DB) as econn:
+                econn.row_factory = sqlite3.Row
+                erows = econn.execute(f"""
+                    SELECT event_id, event_type, industry, sentiment, importance,
+                           event_score, ai_summary, created_at
+                    FROM event_analysis
+                    WHERE event_id IN ({placeholders})
+                      AND created_at > datetime(?, 'unixepoch')
+                """, (*event_ids, since)).fetchall()
+                event_map = {r["event_id"]: dict(r) for r in erows}
+        result = []
+        for r in rows:
+            e = event_map.get(r["event_id"])
+            if e is None:
+                continue
+            result.append({
+                "event_type": e["event_type"],
+                "industry": e["industry"],
+                "sentiment": e["sentiment"],
+                "importance": e["importance"],
+                "event_score": e["event_score"],
+                "ai_summary": e["ai_summary"],
+                "created_at": e["created_at"],
+                "benefit_level": r["benefit_level"],
+                "benefit_score": r["benefit_score"],
+                "match_reason": r["match_reason"],
+            })
+        result.sort(key=lambda x: -(x["event_score"] or 0))
+        return result

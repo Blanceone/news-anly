@@ -1,8 +1,10 @@
+import asyncio
+from datetime import datetime
+
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, ScrollableContainer
 from textual.screen import Screen
 from textual.widgets import Header, Footer, Static, DataTable
-from textual.reactive import reactive
 
 from tui.db import TuiDB
 
@@ -85,13 +87,149 @@ class DashboardScreen(Screen):
 
     def on_mount(self):
         self.db = TuiDB()
+        self.last_fetch = datetime.now()
         self._init_tables()
+        self._analyze_startup()
         self._refresh()
         self.set_interval(10, self._refresh)
+        self.set_interval(30, self._background_fetch)
+
+    def _repair_stock_mappings(self):
+        import sqlite3, json
+        from config import Config
+        from services.stock_service import StockService
+        from services.knowledge_graph import KnowledgeGraph
+        from services.market_verifier import MarketVerifier
+        from services.scoring_engine import ScoringEngine
+        with sqlite3.connect(Config.STOCKS_DB) as sconn:
+            mapped = {r[0] for r in sconn.execute("SELECT DISTINCT event_id FROM event_stock_mapping").fetchall()}
+        with sqlite3.connect(Config.NEWS_DB) as nconn:
+            nconn.row_factory = sqlite3.Row
+            rows = nconn.execute("""
+                SELECT e.event_id, e.keywords_json, e.industry
+                FROM event_analysis e
+                ORDER BY e.event_id
+            """).fetchall()
+        unmapped = [(r["event_id"], r["keywords_json"], r["industry"]) for r in rows if r["event_id"] not in mapped]
+        if not unmapped:
+            return
+        stk = StockService()
+        kg = KnowledgeGraph()
+        mkt = MarketVerifier()
+        for eid, kw_json, industry in unmapped:
+            try:
+                keywords = json.loads(kw_json or "[]")
+                evt_dict = {"keywords": keywords, "industry": industry or ""}
+                stk.process_event_stocks(eid, evt_dict)
+                kg_result = kg.reason(keywords, industry or "")
+                if kg_result:
+                    self._save_kg(eid, kg_result)
+                mkt.verify_event(eid, industry or "", keywords)
+            except Exception:
+                pass
+        ScoringEngine().calculate(hours=72)
+
+    def _analyze_startup(self):
+        from collectors import NewsCollector
+        collector = NewsCollector()
+        backlog = collector.get_unanalyzed_news(limit=200)
+        if backlog:
+            self._analyze_items([], backlog)
+        self._repair_stock_mappings()
+        self._refresh()
 
     def _init_tables(self):
         self.query_one("#top-stocks-table", DataTable).add_columns("#", "code", "name", "score", "evt", "bnf", "mkt")
         self.query_one("#themes-table", DataTable).add_columns("theme", "stocks")
+
+    async def _background_fetch(self):
+        from collectors import NewsCollector
+        collector = NewsCollector()
+        since = collector.get_last_fetch_time()
+        fresh = await asyncio.to_thread(collector.collect_since, since)
+        changed = await asyncio.to_thread(self._analyze_items, fresh)
+        if changed:
+            self._refresh()
+
+    def _analyze_items(self, fresh_items, backlog_items=None):
+        from services.event_service import EventService
+        from services.stock_service import StockService
+        from services.knowledge_graph import KnowledgeGraph
+        from services.market_verifier import MarketVerifier
+        from services.scoring_engine import ScoringEngine
+        from collectors import NewsCollector
+
+        collector = NewsCollector()
+        evt = EventService()
+        stk = StockService()
+        kg = KnowledgeGraph()
+        mkt = MarketVerifier()
+        analyzed_ids = []
+
+        for item in fresh_items:
+            try:
+                event = evt.process_news_item(item)
+                analyzed_ids.append(item["id"])
+                event_id = self._last_event_id()
+                if event_id:
+                    stk.process_event_stocks(event_id, event)
+                    kg_result = kg.reason(event.get("keywords", []), event.get("industry", ""))
+                    if kg_result:
+                        self._save_kg(event_id, kg_result)
+                    mkt.verify_event(event_id, event.get("industry", ""), event.get("keywords", []))
+            except Exception:
+                pass
+
+        backlog = backlog_items or collector.get_unanalyzed_news(limit=20)
+        for item in backlog:
+            if item["id"] in analyzed_ids:
+                continue
+            try:
+                event = evt.process_news_item(item)
+                analyzed_ids.append(item["id"])
+                event_id = self._last_event_id()
+                if event_id:
+                    stk.process_event_stocks(event_id, event)
+                    kg_result = kg.reason(event.get("keywords", []), event.get("industry", ""))
+                    if kg_result:
+                        self._save_kg(event_id, kg_result)
+                    mkt.verify_event(event_id, event.get("industry", ""), event.get("keywords", []))
+            except Exception:
+                pass
+
+        if analyzed_ids:
+            collector.mark_analyzed(analyzed_ids)
+            ScoringEngine().calculate(hours=72)
+            return True
+        return False
+
+    def _last_event_id(self):
+        import sqlite3
+        from config import Config
+        try:
+            with sqlite3.connect(Config.NEWS_DB) as conn:
+                row = conn.execute("SELECT MAX(event_id) FROM event_analysis").fetchone()
+                return row[0]
+        except Exception:
+            return None
+
+    def _save_kg(self, event_id, stocks):
+        if not stocks:
+            return
+        import sqlite3
+        from config import Config
+        benefit_scores = {1: 95, 2: 80, 3: 60}
+        with sqlite3.connect(Config.STOCKS_DB) as conn:
+            for stock in stocks[:10]:
+                level = 1 if stock["score"] >= 85 else (2 if stock["score"] >= 60 else 3)
+                conn.execute("""
+                    INSERT OR IGNORE INTO event_stock_mapping
+                        (event_id, stock_code, stock_name, benefit_level, benefit_score, match_reason)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (event_id, stock["stock_code"], stock["stock_name"],
+                      level, benefit_scores.get(level, 40),
+                      f"图谱推理(路径{stock['path_count']}条,最大权重{stock['score']})"))
+            conn.commit()
 
     def _update_top_stocks(self):
         table = self.query_one("#top-stocks-table", DataTable)

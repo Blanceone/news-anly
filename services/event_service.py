@@ -81,13 +81,15 @@ USER_PROMPT_TEMPLATE = """请分析以下财经新闻：
 
 
 class EventService:
-    def __init__(self, db_path="news.db"):
+    def __init__(self, news_db=None, stocks_db=None):
+        from config import Config
         self.llm = LLMClient()
-        self.db_path = db_path
+        self.news_db = news_db or Config.NEWS_DB
+        self.stocks_db = stocks_db or Config.STOCKS_DB
         self._init_table()
 
     def _init_table(self):
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.news_db) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS event_analysis (
                     event_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -188,7 +190,7 @@ class EventService:
 
     def process_news_item(self, news_item: dict) -> dict:
         result = self.extract(news_item["title"], news_item.get("content", ""))
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.news_db) as conn:
             conn.execute("""
                 INSERT INTO event_analysis
                     (source_type, source_id, event_type, event_subtype,
@@ -220,7 +222,7 @@ class EventService:
 
     def get_recent_events(self, hours=24, limit=50) -> list:
         since = (datetime.now().timestamp() - hours * 3600)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.news_db) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("""
                 SELECT e.*, n.title, n.source_name, n.created_at
