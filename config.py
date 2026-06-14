@@ -28,6 +28,9 @@ class Config:
     # Fetch interval (seconds) — used in loop mode
     FETCH_INTERVAL_SECONDS = int(os.getenv("FETCH_INTERVAL_SECONDS", "5"))
 
+    # Run mode: pre_market / intraday / post_market / all
+    RUN_MODE = os.getenv("RUN_MODE", "all")
+
     # Database paths
     NEWS_DB = "news.db"
     STOCKS_DB = "stocks.db"

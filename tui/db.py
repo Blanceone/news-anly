@@ -686,9 +686,8 @@ class TuiDB:
         try:
             with self._sconn() as conn:
                 rows = conn.execute("""
-                    SELECT theme_name, raw_heat, decay_heat, board_change,
-                           board_volume, up_stock_count, down_stock_count,
-                           limitup_count, heat, last_active_time
+                    SELECT theme_name, heat_score, decay_heat, board_change,
+                           board_volume, mention_count, last_active_time
                     FROM theme_heat
                     ORDER BY decay_heat DESC LIMIT ?
                 """, (limit,)).fetchall()

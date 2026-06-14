@@ -196,7 +196,7 @@ Total = EventScore×15% + BenefitScore(分层)×20% + MarketScore×15%
 - Scoring formula V3: 7维, 多策略输出 (HOT/THEME/LATENT).
 - cls `collect()` passes `since` as `last_time` API param — only gets items after that time.
 - cninfo `collect()` paginates up to 5 pages, stops when items are older than `since`.
-- TUSHARE_TOKEN: `414f37a1a421a7467dc654dffd82ad6de9ebeaa553c3feb969f1836e`
+- TUSHARE_TOKEN: 配置在 `.env` 中，从 https://tushare.pro 获取
 - Knowledge Graph: 47 entities, 82 relations, 42 direct benefits, BFS non-weighted + COMPETITOR skipped.
 - Database separation: news.db (lightweight) + stocks.db (18 tables for analysis results).
 - `event_stock_mapping` receives results from both StockService (keyword/embedding) and KG (BFS).

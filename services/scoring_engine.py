@@ -70,6 +70,7 @@ class ScoringEngine:
 
     def _load_event_stocks(self, since_ts) -> list:
         from config import Config
+        since_str = datetime.fromtimestamp(since_ts).isoformat()
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("""
@@ -81,7 +82,10 @@ class ScoringEngine:
                     COALESCE(mc.confirmation_score, 0) as market_score
                 FROM event_stock_mapping es
                 LEFT JOIN market_confirmation mc ON es.event_id = mc.event_id
-            """).fetchall()
+                WHERE es.created_at > ?
+                ORDER BY es.created_at DESC
+                LIMIT 5000
+            """, (since_str,)).fetchall()
         event_ids = [r["event_id"] for r in rows]
         event_map = {}
         if event_ids:

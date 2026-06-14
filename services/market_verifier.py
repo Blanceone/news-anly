@@ -92,8 +92,9 @@ class MarketVerifier:
     def _ts_boards(self) -> list:
         """Tushare：stock_basic(industry) + daily(pct_chg) -> 行业板块聚合"""
         try:
-            import tushare as ts, config
-            pro = ts.pro_api(config.Config().TUSHARE_TOKEN)
+            import tushare as ts
+            from config import Config as _Cfg
+            pro = ts.pro_api(_Cfg.TUSHARE_TOKEN)
             import datetime
             d = datetime.date.today()
             while d.weekday() >= 5:

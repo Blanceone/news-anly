@@ -108,6 +108,11 @@ def init_stocks_db():
                 conn.execute(f"ALTER TABLE event_stock_mapping ADD COLUMN {col} TEXT")
             except sqlite3.OperationalError:
                 pass
+        # 确保唯一约束防止重复映射
+        try:
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_esm_event_stock ON event_stock_mapping(event_id, stock_code)")
+        except sqlite3.OperationalError:
+            pass
         conn.execute("""
             CREATE TABLE IF NOT EXISTS market_confirmation (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

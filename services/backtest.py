@@ -102,7 +102,7 @@ class BacktestEngine:
         # 统计
         if not trades:
             return {"trades": [], "win_rate": 0, "avg_return": 0,
-                    "max_drawdown": 0, "sharpe": 0, "total_trades": 0}
+                    "max_drawdown": 0, "sharpe_ratio": 0, "total_trades": 0}
 
         returns = [t["return_rate"] for t in trades]
         wins = [r for r in returns if r > 0]
