@@ -90,16 +90,21 @@ class NewsCollector:
         return result
 
     def _save_news(self, news: list):
+        now = datetime.now()
         with sqlite3.connect(self.news_db) as conn:
             for item in news:
                 try:
+                    ts = item["created_at"]
+                    # 防止未来时间入库（如 cninfo 公告日期晚于当前时间）
+                    if ts > now:
+                        ts = now
                     conn.execute("""
                         INSERT OR IGNORE INTO news (id, title, content, source, source_name, url, created_at, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         item["id"], item["title"], item["content"],
                         item["source"], item["source_name"], item["url"],
-                        item["created_at"].isoformat(), datetime.now().isoformat(),
+                        ts.isoformat(), now.isoformat(),
                     ))
                 except Exception:
                     pass
