@@ -110,8 +110,18 @@ def init_stocks_db():
                 pass
         # 确保唯一约束防止重复映射
         try:
-            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_esm_event_stock ON event_stock_mapping(event_id, stock_code)")
+            # 先清理已存在的重复记录（保留 id 最小的那条）
+            conn.execute("""
+                DELETE FROM event_stock_mapping WHERE id NOT IN (
+                    SELECT MIN(id) FROM event_stock_mapping
+                    GROUP BY event_id, stock_code
+                )
+            """)
         except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_esm_event_stock ON event_stock_mapping(event_id, stock_code)")
+        except (sqlite3.OperationalError, sqlite3.IntegrityError):
             pass
         conn.execute("""
             CREATE TABLE IF NOT EXISTS market_confirmation (

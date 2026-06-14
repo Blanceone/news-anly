@@ -286,7 +286,7 @@ class StockService:
                 btype = self._assign_benefit_type(stock, src)
                 bpath = self._build_benefit_path(stock, src)
                 conn.execute("""
-                    INSERT INTO event_stock_mapping
+                    INSERT OR IGNORE INTO event_stock_mapping
                         (event_id, stock_code, stock_name, benefit_level, benefit_score,
                          benefit_type, benefit_path, match_reason)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
