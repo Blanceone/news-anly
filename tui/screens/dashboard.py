@@ -1,12 +1,11 @@
 import asyncio
-from datetime import datetime
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, ScrollableContainer
 from textual.screen import Screen
 from textual.widgets import Header, Footer, Static, DataTable
 
-from tui.db import TuiDB
+from tui.db import TuiDB, to_bjt
 
 
 class DashboardScreen(Screen):
@@ -256,7 +255,7 @@ class DashboardScreen(Screen):
             return
         lines = []
         for n in items:
-            ts = (n.get("created_at") or "")[11:19] if n.get("created_at") else ""
+            ts = to_bjt(n.get("created_at"))
             lines.append(f"{ts} {n['title'][:70]}")
         widget.update("\n".join(lines))
 

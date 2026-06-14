@@ -3,7 +3,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Header, Footer, Static, DataTable
 
-from tui.db import TuiDB
+from tui.db import TuiDB, to_bjt
 
 
 class EventViewScreen(Screen):
@@ -57,7 +57,7 @@ class EventViewScreen(Screen):
         table.clear()
         self.events = self.db.event_list(hours=48, limit=60)
         for e in self.events:
-            ts = (e.get("created_at") or "")[11:19] if e.get("created_at") else ""
+            ts = to_bjt(e.get("created_at"))
             event_type = e.get("event_type", "") or ""
             industry = e.get("industry", "") or ""
             score = e.get("event_score", 0) or 0
@@ -90,6 +90,12 @@ class EventViewScreen(Screen):
             f"情绪: {ev.get('sentiment', '')}  重要性: {ev.get('importance', '')}",
             f"事件评分: {ev.get('event_score', 0)}  市场验证: {ev.get('market_score', 0)}",
             f"新颖度: {ev.get('novelty_score', 0)}",
+            f"时间: {to_bjt(ev.get('created_at'))}",
+            "",
+            f"[bold]来源新闻:[/]",
+            f"  标题: {ev.get('news_title', '(未知)')}",
+            f"  来源: {ev.get('news_source', '(未知)')}",
+            f"  链接: {ev.get('news_url', '(无)')}",
             "",
             f"[bold]摘要:[/] {ev.get('ai_summary', '')}",
             "",

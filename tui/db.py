@@ -1,6 +1,21 @@
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
+
+BJT = timezone(timedelta(hours=8))
+
+
+def to_bjt(ts_str):
+    """Convert SQLite UTC timestamp string to Beijing time string (MM-DD HH:MM)."""
+    if not ts_str:
+        return ""
+    try:
+        dt = datetime.fromisoformat(ts_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(BJT).strftime("%m-%d %H:%M")
+    except Exception:
+        return ts_str[11:19] if len(ts_str) >= 19 else ts_str
 
 
 class TuiDB:
@@ -490,8 +505,10 @@ class TuiDB:
             since = (datetime.now() - timedelta(hours=hours)).isoformat()
             with self._conn() as conn:
                 rows = conn.execute("""
-                    SELECT * FROM event_analysis
-                    WHERE created_at > ? ORDER BY created_at DESC LIMIT ?
+                    SELECT e.*, n.title as news_title, n.source_name as news_source, n.url as news_url
+                    FROM event_analysis e
+                    LEFT JOIN news n ON e.source_id = n.id
+                    WHERE e.created_at > ? ORDER BY e.created_at DESC LIMIT ?
                 """, (since, limit)).fetchall()
                 events = [dict(r) for r in rows]
             # Merge market confirmation from stocks.db

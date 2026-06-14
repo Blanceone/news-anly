@@ -3,7 +3,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Header, Footer, Static, DataTable
 
-from tui.db import TuiDB
+from tui.db import TuiDB, to_bjt
 
 
 class StockViewScreen(Screen):
@@ -113,7 +113,7 @@ class StockViewScreen(Screen):
         if events:
             lines.extend(["", "[bold]关联事件:[/]"])
             for e in events[:8]:
-                ts = (e.get("created_at") or "")[11:19] if e.get("created_at") else ""
+                ts = to_bjt(e.get("created_at"))
                 score_ev = e.get("event_score", 0) or 0
                 bscore = e.get("benefit_score", 0) or 0
                 reason = (e.get("match_reason") or "")[:30]
