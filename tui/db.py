@@ -6,16 +6,20 @@ BJT = timezone(timedelta(hours=8))
 
 
 def to_bjt(ts_str):
-    """Convert SQLite UTC timestamp string to Beijing time string (MM-DD HH:MM)."""
+    """Format timestamp string to Beijing time (MM-DD HH:MM). DB stores all times in Beijing time (UTC+8)."""
     if not ts_str:
         return ""
     try:
         dt = datetime.fromisoformat(ts_str)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            # DB 中以北京时间存储，直接格式化
+            return dt.strftime("%m-%d %H:%M")
         return dt.astimezone(BJT).strftime("%m-%d %H:%M")
     except Exception:
-        return ts_str[11:19] if len(ts_str) >= 19 else ts_str
+        # fallback: YYYY-MM-DDTHH:MM:SS → MM-DD HH:MM
+        if len(ts_str) >= 16:
+            return ts_str[5:10] + " " + ts_str[11:16]
+        return ts_str
 
 
 class TuiDB:
