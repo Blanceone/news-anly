@@ -57,6 +57,17 @@ SEED = {
         # ── New products ──
         ("product", "机器人灵巧手产品", "灵巧手、末端执行器"),
         ("product", "储能产品", "储能系统、逆变器"),
+        # ── Company entities (Phase 11) ──
+        ("company", "华为", "通信设备、芯片设计、云计算"),
+        ("company", "英伟达", "GPU、AI芯片、自动驾驶"),
+        ("company", "苹果", "消费电子、手机、芯片设计"),
+        ("company", "特斯拉", "电动车、机器人、储能"),
+        ("company", "比亚迪", "电动车、锂电池、半导体"),
+        ("company", "三星", "半导体、存储、消费电子"),
+        ("company", "台积电", "晶圆代工、先进制程"),
+        ("company", "高通", "通信芯片、手机SoC"),
+        ("company", "AMD", "CPU、GPU、芯片设计"),
+        ("company", "英特尔", "CPU、芯片制造、AI芯片"),
     ],
     "relations": [
         # Theme → Industry
@@ -99,6 +110,38 @@ SEED = {
         ("technology", "CPO", "product", "光模块产品", "ENABLE", 80),
         ("technology", "先进制程", "product", "GPU芯片", "ENABLE", 90),
         ("technology", "EDA", "product", "GPU芯片", "ENABLE", 70),
+        # ── Company → Industry / Technology / Product (Phase 11) ──
+        ("company", "华为", "industry", "AI芯片", "USES", 90),
+        ("company", "华为", "industry", "封测", "USES", 85),
+        ("company", "华为", "technology", "先进制程", "USES", 90),
+        ("company", "华为", "technology", "Chiplet", "USES", 85),
+        ("company", "英伟达", "industry", "AI芯片", "CONTAINS", 95),
+        ("company", "特斯拉", "industry", "机器人关节", "USES", 85),
+        ("company", "特斯拉", "technology", "储能", "USES", 80),
+        ("company", "比亚迪", "industry", "锂电池", "CONTAINS", 90),
+        ("company", "比亚迪", "technology", "储能", "USES", 85),
+        ("company", "台积电", "industry", "晶圆代工", "CONTAINS", 95),
+        ("company", "台积电", "technology", "先进制程", "CONTAINS", 95),
+        # ── Company → Stock (SUPPLIER / CUSTOMER) ──
+        ("company", "华为", "stock", "002156", "SUPPLIER", 90),
+        ("company", "华为", "stock", "600584", "SUPPLIER", 85),
+        ("company", "华为", "stock", "002185", "SUPPLIER", 80),
+        ("company", "华为", "stock", "603005", "SUPPLIER", 80),
+        ("company", "英伟达", "stock", "688041", "SUPPLIER", 90),
+        ("company", "英伟达", "stock", "688256", "SUPPLIER", 85),
+        ("company", "特斯拉", "stock", "601689", "SUPPLIER", 85),
+        ("company", "特斯拉", "stock", "002050", "SUPPLIER", 80),
+        ("company", "特斯拉", "stock", "300750", "SUPPLIER", 75),
+        ("company", "苹果", "stock", "002415", "SUPPLIER", 85),
+        ("company", "苹果", "stock", "600584", "SUPPLIER", 80),
+        ("company", "比亚迪", "stock", "300750", "CUSTOMER", 80),
+        ("company", "比亚迪", "stock", "002129", "SUPPLIER", 75),
+        # ── Company ↔ Company (COMPETITOR) ──
+        ("company", "华为", "company", "高通", "COMPETITOR", 80),
+        ("company", "英伟达", "company", "AMD", "COMPETITOR", 85),
+        ("company", "英伟达", "company", "英特尔", "COMPETITOR", 80),
+        ("company", "台积电", "company", "三星", "COMPETITOR", 85),
+        ("company", "比亚迪", "company", "特斯拉", "COMPETITOR", 75),
         # Product → Stock
         ("product", "GPU芯片", "stock", "688041", "BENEFIT", 95),
         ("product", "GPU芯片", "stock", "688256", "BENEFIT", 90),
@@ -247,9 +290,23 @@ class KnowledgeGraph:
             rows = conn.execute(f"SELECT * FROM kg_entity WHERE {conditions} LIMIT 20", params).fetchall()
             return [dict(r) for r in rows]
 
-    def reason(self, keywords: list, industry: str = "") -> list:
-        """推理引擎：关键词 → 实体 → BFS → 受益股票排序"""
+    def reason(self, keywords: list, industry: str = "", companies: list = None) -> list:
+        """推理引擎：关键词+公司 → 实体 → BFS → 受益股票排序"""
         matches = self.search_entities(keywords, industry)
+        # 公司实体: 直接搜索实体表
+        if companies:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                placeholders = ",".join("?" for _ in companies)
+                for c in companies:
+                    rows = conn.execute("""
+                        SELECT * FROM kg_entity
+                        WHERE entity_type='company' AND name LIKE ?
+                        LIMIT 1
+                    """, (f"%{c}%",)).fetchall()
+                    for r in rows:
+                        if not any(m["entity_id"] == r["entity_id"] for m in matches):
+                            matches.append(dict(r))
         if not matches:
             return []
 
@@ -292,10 +349,11 @@ class KnowledgeGraph:
 
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
+            # 关系边: 跳过 COMPETITOR (竞品关系不推导受益)
             rows = conn.execute("""
                 SELECT target_type, target_name, relation_type, weight
                 FROM kg_relation
-                WHERE source_type=? AND source_name=?
+                WHERE source_type=? AND source_name=? AND relation_type != 'COMPETITOR'
                 ORDER BY weight DESC
             """, (etype, ename)).fetchall()
             direct_rows = conn.execute("""

@@ -48,6 +48,7 @@ class NewsScheduler:
                     kg_result = self.knowledge_graph.reason(
                         event.get("keywords", []),
                         event.get("industry", ""),
+                        companies=event.get("companies", []),
                     )
                     self._save_kg_result(event_id, kg_result)
                     self.market_verifier.verify_event(
@@ -164,6 +165,7 @@ class NewsScheduler:
                     kg_result = self.knowledge_graph.reason(
                         event.get("keywords", []),
                         event.get("industry", ""),
+                        companies=event.get("companies", []),
                     )
                     self._save_kg_result(event_id, kg_result)
                     self.market_verifier.verify_event(

@@ -172,6 +172,7 @@ class EventService:
             "novelty_score": novelty,
             "event_score": self._compute_event_score(importance, novelty),
             "entities": data.get("entities", []),
+            "companies": data.get("companies", []),
             "amount": float(data.get("amount", 0) or 0),
             "amount_unit": str(data.get("amount_unit", "")),
             "keywords": data.get("keywords", []),
@@ -185,7 +186,8 @@ class EventService:
             "industry": "", "sub_industry": "",
             "sentiment": "neutral", "importance": "C",
             "novelty_score": 0, "event_score": 0,
-            "entities": [], "amount": 0.0, "amount_unit": "",
+            "entities": [], "companies": [],
+            "amount": 0.0, "amount_unit": "",
             "keywords": [], "ai_summary": "", "reason": "",
             "raw_response": "",
         }

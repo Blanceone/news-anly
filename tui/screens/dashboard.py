@@ -173,7 +173,8 @@ class DashboardScreen(Screen):
                 event_id = self._last_event_id()
                 if event_id:
                     stk.process_event_stocks(event_id, event)
-                    kg_result = kg.reason(event.get("keywords", []), event.get("industry", ""))
+                    kg_result = kg.reason(event.get("keywords", []), event.get("industry", ""),
+                                           companies=event.get("companies", []))
                     if kg_result:
                         self._save_kg(event_id, kg_result)
                     mkt.verify_event(event_id, event.get("industry", ""), event.get("keywords", []))
@@ -190,7 +191,8 @@ class DashboardScreen(Screen):
                 event_id = self._last_event_id()
                 if event_id:
                     stk.process_event_stocks(event_id, event)
-                    kg_result = kg.reason(event.get("keywords", []), event.get("industry", ""))
+                    kg_result = kg.reason(event.get("keywords", []), event.get("industry", ""),
+                                           companies=event.get("companies", []))
                     if kg_result:
                         self._save_kg(event_id, kg_result)
                     mkt.verify_event(event_id, event.get("industry", ""), event.get("keywords", []))
