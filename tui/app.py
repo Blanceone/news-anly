@@ -15,6 +15,8 @@ from tui.screens.dashboard import DashboardScreen
 from tui.screens.theme_view import ThemeViewScreen
 from tui.screens.stock_view import StockViewScreen
 from tui.screens.event_view import EventViewScreen
+from tui.screens.discovery_view import DiscoveryViewScreen
+from tui.screens.cluster_view import ClusterViewScreen
 
 
 class StockTUI(App):
@@ -23,12 +25,16 @@ class StockTUI(App):
         "themes": ThemeViewScreen,
         "stocks": StockViewScreen,
         "events": EventViewScreen,
+        "discovery": DiscoveryViewScreen,
+        "clusters": ClusterViewScreen,
     }
     BINDINGS = [
         Binding("1", "switch('dashboard')", "看板"),
         Binding("2", "switch('themes')", "主题"),
         Binding("3", "switch('stocks')", "股票"),
         Binding("4", "switch('events')", "事件"),
+        Binding("5", "switch('discovery')", "发现"),
+        Binding("6", "switch('clusters')", "簇"),
         Binding("q", "quit", "退出"),
         Binding("r", "refresh", "刷新"),
     ]
@@ -64,9 +70,11 @@ class StockTUI(App):
     def compose(self) -> ComposeResult:
         with Horizontal(id="top-bar"):
             yield Static(" [1] 看板 ", id="tab-dashboard", classes="tab-item active")
-            yield Static(" [2] 主题 ", id="tab-themes", classes="tab-item")
+            yield Static(" [2] 板块 ", id="tab-themes", classes="tab-item")
             yield Static(" [3] 股票 ", id="tab-stocks", classes="tab-item")
             yield Static(" [4] 事件 ", id="tab-events", classes="tab-item")
+            yield Static(" [5] 发现 ", id="tab-discovery", classes="tab-item")
+            yield Static(" [6] 簇 ", id="tab-clusters", classes="tab-item")
             yield Static("", id="clock")
         yield Footer()
 
@@ -81,7 +89,8 @@ class StockTUI(App):
 
     def action_switch(self, screen_name: str):
         self.push_screen(screen_name)
-        for name in ["dashboard", "themes", "stocks", "events"]:
+        all_tabs = ["dashboard", "themes", "stocks", "events", "discovery", "clusters"]
+        for name in all_tabs:
             w = self.query_one(f"#tab-{name}", Static)
             w.remove_class("active")
         w = self.query_one(f"#tab-{screen_name}", Static)

@@ -556,3 +556,47 @@ class TuiDB:
             return {"news": news_count, "events": event_count, "stocks": stock_count}
         except Exception:
             return {"news": 0, "events": 0, "stocks": 0}
+
+    def theme_candidates(self, limit=50):
+        try:
+            with self._sconn() as conn:
+                rows = conn.execute("""
+                    SELECT * FROM theme_candidate
+                    ORDER BY mention_count DESC, last_seen DESC LIMIT ?
+                """, (limit,)).fetchall()
+                return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    def event_clusters(self, limit=30):
+        try:
+            with self._sconn() as conn:
+                rows = conn.execute("""
+                    SELECT * FROM event_cluster
+                    ORDER BY event_count DESC, last_seen DESC LIMIT ?
+                """, (limit,)).fetchall()
+                return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    def cluster_events(self, cluster_id):
+        try:
+            with self._sconn() as sconn:
+                event_ids = sconn.execute("""
+                    SELECT event_id FROM event_cluster_map WHERE cluster_id=?
+                """, (cluster_id,)).fetchall()
+                eids = tuple(r[0] for r in event_ids)
+                if not eids:
+                    return []
+            with self._conn() as nconn:
+                placeholders = ",".join("?" for _ in eids)
+                rows = nconn.execute(f"""
+                    SELECT e.*, n.title, n.source_name
+                    FROM event_analysis e
+                    JOIN news n ON e.source_id = n.id
+                    WHERE e.event_id IN ({placeholders})
+                    ORDER BY e.event_score DESC
+                """, eids).fetchall()
+                return [dict(r) for r in rows]
+        except Exception:
+            return []
