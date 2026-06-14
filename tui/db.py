@@ -391,6 +391,81 @@ class TuiDB:
         except Exception:
             return []
 
+    def industry_sectors(self):
+        """仅Tushare行业板块（有实时行情）"""
+        sectors = self._ts_sectors()
+        if not sectors:
+            sectors = self._ak_sectors()
+        if not sectors:
+            sectors = self._load_sector_cache()
+        return sectors
+
+    def concept_themes(self):
+        """概念主题（KG主题 + AKShare概念板块），含热度/股票数"""
+        themes = []
+        seen = set()
+        # KG 主题 → theme_stock_mapping
+        try:
+            with self._sconn() as conn:
+                rows = conn.execute("""
+                    SELECT t.theme_name, t.theme_key, COUNT(DISTINCT t.stock_code) as stock_count
+                    FROM theme_stock_mapping t GROUP BY t.theme_key
+                """).fetchall()
+                for r in rows:
+                    themes.append({
+                        "name": r["theme_name"],
+                        "key": r["theme_key"],
+                        "stock_count": r["stock_count"],
+                        "change": 0, "up": 0, "down": 0, "volume": 0,
+                        "source": "kg",
+                    })
+                    seen.add(r["theme_name"])
+        except Exception:
+            pass
+        # AKShare 概念板块（有实时行情）
+        try:
+            import akshare as ak
+            df = ak.stock_board_concept_spot_em()
+            for _, row in df.iterrows():
+                d = {}
+                for k, v in row.items():
+                    k = k.strip()
+                    if "板块名称" in k or "名称" in k:
+                        d["name"] = str(v)
+                    elif "涨跌幅" in k:
+                        d["change"] = round(float(v), 2) if v else 0.0
+                    elif "上涨" in k:
+                        d["up"] = int(v) if v else 0
+                    elif "下跌" in k:
+                        d["down"] = int(v) if v else 0
+                    elif "成交额" in k:
+                        d["volume"] = round(float(v) / 1e8, 1) if v else 0.0
+                if d.get("name") and d["name"] not in seen:
+                    d["source"] = "concept"
+                    d["stock_count"] = 0
+                    themes.append(d)
+                    seen.add(d["name"])
+        except Exception:
+            pass
+        # 静态兜底：确保未在theme_stock_mapping中的主题仍然可见
+        static_names = [
+            "人工智能", "算力基础设施", "半导体", "机器人", "创新药",
+            "先进封装", "具身智能", "低空经济", "新能源", "CPO/光通信",
+            "AI芯片", "光模块", "封测", "减速器", "CXO",
+            "光伏", "锂电池", "储能", "人形机器人", "智能驾驶",
+            "玻璃基板",
+        ]
+        for name in static_names:
+            if name not in seen:
+                themes.append({
+                    "name": name, "key": name, "stock_count": 0,
+                    "change": 0, "up": 0, "down": 0, "volume": 0,
+                    "source": "static",
+                })
+                seen.add(name)
+        themes.sort(key=lambda t: -t.get("change", 0))
+        return themes
+
     def hot_themes(self):
         with self._sconn() as conn:
             rows = conn.execute("""

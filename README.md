@@ -15,23 +15,32 @@
 │   └── cninfo.py           # 巨潮资讯 (POST分页，增量拉取)
 ├── services/               # 业务服务层
 │   ├── event_service.py    # AI事件识别 (LLM结构化JSON)
-│   ├── stock_service.py    # 股票关联映射 (10主题57只受益股)
-│   ├── knowledge_graph.py  # 知识图谱 (37实体 + BFS推理引擎)
-│   ├── scoring_engine.py   # 综合评分 (事件×30% + 受益×40% + 市场×30%)
-│   └── market_verifier.py  # 市场验证 (Tushare主力+AKShare补充)
+│   ├── stock_service.py    # 股票关联映射 (10主题57只受益股, 含受益链分层)
+│   ├── knowledge_graph.py  # 知识图谱 (47实体 + BFS推理引擎)
+│   ├── scoring_engine.py   # 综合评分 V3 (7维公式)
+│   ├── market_verifier.py  # 市场验证 (Tushare主力+AKShare补充)
+│   ├── theme_heat.py       # 主题热度 (含时间衰减 + 涨停热度)
+│   ├── theme_discovery.py  # 新概念自动发现
+│   ├── embedding_service.py# TF-IDF语义匹配
+│   ├── event_cluster.py    # 事件聚类 (含生命周期管理)
+│   ├── stock_profile.py    # 股票画像+龙头评分 V3
+│   ├── limitup_stats.py    # 涨停热度统计 V3
+│   └── backtest.py         # 回测系统 V3
 ├── core/
 │   ├── db_init.py          # 双数据库初始化 (news.db + stocks.db)
 │   ├── scheduler.py        # 采集→分析→评分 全链路编排
 │   ├── analyzer.py         # LLM分析 + keyword fallback
 │   └── feishu_pusher.py    # 飞书交互式卡片推送
 ├── tui/                    # Textual TUI终端
-│   ├── app.py              # 主应用 (顶部导航1-4 + 时钟)
+│   ├── app.py              # 主应用 (顶部导航1-6 + 时钟)
 │   ├── db.py               # DB查询层 (跨库合并)
-│   └── screens/            # 4个屏幕
+│   └── screens/            # 6个屏幕
 │       ├── dashboard.py    # 看板: 统计栏 + 新闻流 + 推荐榜 + 题材
-│       ├── theme_view.py   # 板块: 129个行业/概念 → 成分股详情
+│       ├── theme_view.py   # 三栏: 行业板块 / 概念主题 / 成分股
 │       ├── stock_view.py   # 股票: 评分排行 → 事件/主题详情
-│       └── event_view.py   # 事件: 列表 → 影响股票
+│       ├── event_view.py   # 事件: 列表 → 影响股票 + 来源新闻
+│       ├── discovery_view.py # 发现: 新概念候选
+│       └── cluster_view.py # 簇: 事件聚类视图
 ├── prd/                    # 产品需求文档 (7份)
 └── ── news.db + stocks.db  # 双数据库分离
 ```
@@ -122,13 +131,18 @@ Dashboard 每10秒自动刷新，其余页面每30秒自动刷新。
 - 37实体 / 53关系 / 42直连受益
 - 初始覆盖：AI/算力/半导体/先进封装/具身智能/低空经济/新能源/CPO/创新药 十大主题
 
-### 5. 综合评分
+### 5. 综合评分 (V3)
 ```
-总分 = 事件强度×30% + 受益程度×40% + 市场验证×30%
+总分 = 事件×15% + 受益(分层)×20% + 市场×15%
+     + 热度(衰减)×15% + 簇(生命周期)×10%
+     + 龙头评分×15% + 生命周期系数×10%
 ```
 - **EventScore**: S=100 / A=80 / B=60 / C=40
-- **BenefitScore**: 一级=95 / 二级=80 / 三级=60
+- **BenefitScore**: 分层加权 DIRECT×1.0 / INDIRECT×0.8 / SENTIMENT×0.5
 - **MarketScore**: 板块涨跌幅+涨跌比+成交额 (0-100)
+- **ThemeHeat**: 含时间衰减（半衰期3天）+ 涨停热度
+- **ClusterHeat**: 生命周期加权 BIRTH(0.8) / GROWING(1.0) / PEAK(0.7) / DECLINING(0.3) / DEAD(0.0)
+- **LeaderScore**: 流动性×20% + 活跃度×30% + 题材数×20% + 涨停历史×30%
 
 ### 6. 市场验证
 - 交易时段（工作日 9:25-15:00）自动运行
@@ -138,7 +152,7 @@ Dashboard 每10秒自动刷新，其余页面每30秒自动刷新。
 
 ### 7. 双数据库架构
 - **news.db**: news / reports / event_analysis
-- **stocks.db**: stock_basic / theme_stock_mapping / event_stock_mapping / market_confirmation / stock_score / kg_* / sector_cache
+- **stocks.db**: stock_basic / theme_stock_mapping / event_stock_mapping / market_confirmation / stock_score / recommendation_result / kg_entity / kg_relation / kg_direct_benefit / sector_cache / theme_candidate / theme_embedding / event_cluster / event_cluster_map / theme_heat / stock_profile / theme_limitup_stats / backtest_result / backtest_trades
 - 跨库 JOIN 在 Python 应用层合并
 
 ### 8. 采集即分析
@@ -197,11 +211,23 @@ Dashboard 每10秒自动刷新，其余页面每30秒自动刷新。
 
 | Phase | 功能 | 状态 |
 |-------|------|------|
-| 1 | 数据流打通（采集+去重+入库） | ✅ |
-| 2 | 事件识别引擎（8大类 + LLM抽取） | ✅ |
-| 3 | 股票关联V2（10主题57只受益股） | ✅ |
-| 4 | 知识图谱V2（37实体 + BFS推理） | ✅ |
-| 5 | 评分系统V2（事件×30% + 受益×40% + 市场×30%） | ✅ |
-| 6 | 市场验证引擎（Tushare主力 + AKShare补充） | ✅ |
-| 7 | TUI终端（双库/板块视图/启动分析/自动修复） | ✅ |
-| 8 | 历史回测 | ⬜ |
+| V1-1 | 数据流打通（采集+去重+入库） | ✅ |
+| V1-2 | 事件识别引擎（8大类 + LLM抽取） | ✅ |
+| V1-3 | 股票关联（10主题57只受益股） | ✅ |
+| V1-4 | 知识图谱（47实体 + BFS推理） | ✅ |
+| V1-5 | 评分系统V2（事件×30% + 受益×40% + 市场×30%） | ✅ |
+| V1-6 | 市场验证引擎（Tushare主力 + AKShare补充） | ✅ |
+| V1-7 | TUI终端（双库/6屏幕/启动分析） | ✅ |
+| V2-8 | Theme Discovery（新概念自动发现） | ✅ |
+| V2-9 | Embedding Match（TF-IDF语义匹配） | ✅ |
+| V2-10 | Event Clustering（事件聚类+生命周期） | ✅ |
+| V2-11 | Company KG（10家公司实体） | ✅ |
+| V2-12 | Theme Heat（含时间衰减+涨停热度） | ✅ |
+| V2-13 | 评分引擎V3（7维公式+多策略输出） | ✅ |
+| V3-1 | 受益链分层（DIRECT/INDIRECT/SENTIMENT） | ✅ |
+| V3-2 | 主题热度时间衰减（半衰期3天） | ✅ |
+| V3-3 | Stock Profile引擎（龙头评分） | ✅ |
+| V3-4 | 涨停热度系统（涨停/连板/炸板） | ✅ |
+| V3-5 | 事件生命周期（BIRTH→DEAD） | ✅ |
+| V3-6 | 推荐引擎V3（7维评分） | ✅ |
+| V3-7 | 回测系统（胜率/夏普/回撤） | ✅ |

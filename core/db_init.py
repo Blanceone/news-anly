@@ -97,10 +97,17 @@ def init_stocks_db():
                 stock_name TEXT NOT NULL,
                 benefit_level INTEGER,
                 benefit_score INTEGER,
+                benefit_type TEXT DEFAULT 'DIRECT',
+                benefit_path TEXT,
                 match_reason TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        for col in ("benefit_type", "benefit_path"):
+            try:
+                conn.execute(f"ALTER TABLE event_stock_mapping ADD COLUMN {col} TEXT")
+            except sqlite3.OperationalError:
+                pass
         conn.execute("""
             CREATE TABLE IF NOT EXISTS market_confirmation (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -212,9 +219,18 @@ def init_stocks_db():
                 event_count INTEGER DEFAULT 1,
                 first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                heat_score REAL DEFAULT 0
+                heat_score REAL DEFAULT 0,
+                birth_time TIMESTAMP,
+                peak_time TIMESTAMP,
+                decline_time TIMESTAMP,
+                status TEXT DEFAULT 'BIRTH'
             )
         """)
+        for col in ("birth_time", "peak_time", "decline_time", "status"):
+            try:
+                conn.execute(f"ALTER TABLE event_cluster ADD COLUMN {col} TEXT")
+            except sqlite3.OperationalError:
+                pass
         conn.execute("""
             CREATE TABLE IF NOT EXISTS event_cluster_map (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -228,10 +244,72 @@ def init_stocks_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 theme_name TEXT NOT NULL,
                 heat_score REAL DEFAULT 0,
+                decay_heat REAL DEFAULT 0,
                 mention_count INTEGER DEFAULT 0,
                 board_change REAL DEFAULT 0,
                 board_volume REAL DEFAULT 0,
+                last_active_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        for col_type in (("decay_heat", "REAL"), ("last_active_time", "TEXT")):
+            try:
+                conn.execute(f"ALTER TABLE theme_heat ADD COLUMN {col_type[0]} {col_type[1]}")
+            except sqlite3.OperationalError:
+                pass
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS stock_profile (
+                stock_code TEXT PRIMARY KEY,
+                stock_name TEXT NOT NULL,
+                market_cap REAL DEFAULT 0,
+                turnover_rate REAL DEFAULT 0,
+                theme_count INTEGER DEFAULT 0,
+                industry TEXT DEFAULT '',
+                volatility REAL DEFAULT 0,
+                limitup_history INTEGER DEFAULT 0,
+                leader_score REAL DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS theme_limitup_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                theme_name TEXT NOT NULL,
+                trade_date TEXT NOT NULL,
+                limitup_count INTEGER DEFAULT 0,
+                consecutive_count INTEGER DEFAULT 0,
+                broken_count INTEGER DEFAULT 0,
+                UNIQUE(theme_name, trade_date)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS backtest_result (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                strategy_type TEXT,
+                start_date TEXT,
+                end_date TEXT,
+                holding_days INTEGER,
+                win_rate REAL,
+                avg_return REAL,
+                max_drawdown REAL,
+                sharpe_ratio REAL,
+                excess_return REAL,
+                total_trades INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS backtest_trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                backtest_id INTEGER,
+                trade_date TEXT,
+                stock_code TEXT,
+                stock_name TEXT,
+                buy_price REAL,
+                sell_price REAL,
+                holding_days INTEGER,
+                return_rate REAL,
+                strategy_type TEXT
             )
         """)
         conn.commit()

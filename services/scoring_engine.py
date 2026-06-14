@@ -1,12 +1,22 @@
-"""评分系统 — Phase 13
+"""评分系统 — Phase 6 (V3)
 
-V2 公式：
-  TotalScore = EventScore×20% + BenefitScore×25% + MarketScore×20%
-             + ThemeHeat×20% + ClusterHeat×15%
+V3 公式：
+  TotalScore = EventScore×15% + BenefitScore(分层)×20% + MarketScore×15%
+             + ThemeHeat(衰减)×15% + ClusterHeat(生命周期)×10%
+             + LeaderScore×15% + LifecycleScore×10%
 """
 import sqlite3
 from collections import defaultdict
 from datetime import datetime
+
+
+_LIFECYCLE_WEIGHTS = {
+    "BIRTH": 0.8,
+    "GROWING": 1.0,
+    "PEAK": 0.7,
+    "DECLINING": 0.3,
+    "DEAD": 0.0,
+}
 
 
 class ScoringEngine:
@@ -52,11 +62,9 @@ class ScoringEngine:
     def calculate(self, hours=24) -> list:
         today = datetime.now().strftime("%Y-%m-%d")
         since = (datetime.now().timestamp() - hours * 3600)
-
         event_stocks = self._load_event_stocks(since)
         stock_data = self._aggregate(event_stocks)
         results = self._rank(stock_data)
-
         self._save(today, results)
         return results
 
@@ -68,6 +76,7 @@ class ScoringEngine:
                 SELECT
                     es.stock_code, es.stock_name,
                     es.benefit_score, es.benefit_level,
+                    COALESCE(es.benefit_type, 'DIRECT') as benefit_type,
                     es.event_id,
                     COALESCE(mc.confirmation_score, 0) as market_score
                 FROM event_stock_mapping es
@@ -87,16 +96,22 @@ class ScoringEngine:
                       AND created_at > datetime(?, 'unixepoch')
                 """, (*event_ids, since_ts)).fetchall()
                 event_map = {r["event_id"]: dict(r) for r in erows}
+        _BENEFIT_WEIGHTS = {"DIRECT": 1.0, "INDIRECT": 0.8, "SENTIMENT": 0.5}
         result = []
         for r in rows:
             e = event_map.get(r["event_id"])
             if e is None:
                 continue
+            btype = r["benefit_type"] or "DIRECT"
+            raw_score = r["benefit_score"] or 0
+            weighted = int(raw_score * _BENEFIT_WEIGHTS.get(btype, 0.5))
             result.append({
                 "stock_code": r["stock_code"],
                 "stock_name": r["stock_name"],
-                "benefit_score": r["benefit_score"],
+                "benefit_score": weighted,
+                "benefit_raw": raw_score,
                 "benefit_level": r["benefit_level"],
+                "benefit_type": btype,
                 "event_score": e["event_score"],
                 "event_type": e["event_type"],
                 "importance": e["importance"],
@@ -134,35 +149,44 @@ class ScoringEngine:
         return dict(stocks)
 
     def _load_theme_heat(self) -> dict:
-        """加载主题热度 {theme_name: heat_score}"""
         try:
             with sqlite3.connect(self.db_path) as conn:
-                rows = conn.execute("SELECT theme_name, heat_score FROM theme_heat").fetchall()
-                return {r[0]: (r[1] or 0) for r in rows}
+                rows = conn.execute(
+                    "SELECT theme_name, COALESCE(CAST(decay_heat AS REAL), heat_score, 0) FROM theme_heat"
+                ).fetchall()
+                return {r[0]: float(r[1] or 0) for r in rows}
         except Exception:
             return {}
 
     def _load_cluster_scores(self, event_ids: list) -> dict:
-        """加载事件簇热度 {event_id: cluster_heat_score}"""
         if not event_ids:
             return {}
         try:
             with sqlite3.connect(self.db_path) as conn:
                 placeholders = ",".join("?" for _ in event_ids)
                 rows = conn.execute(f"""
-                    SELECT m.event_id, c.heat_score as cluster_heat,
-                           c.event_count as cluster_count
+                    SELECT m.event_id,
+                           COALESCE(CAST(c.heat_score AS REAL), 0) as cluster_heat,
+                           COALESCE(c.event_count, 1) as cluster_count,
+                           COALESCE(c.status, 'BIRTH') as lifecycle_status
                     FROM event_cluster_map m
                     JOIN event_cluster c ON m.cluster_id = c.cluster_id
                     WHERE m.event_id IN ({placeholders})
                 """, event_ids).fetchall()
-                # cluster_heat = min(100, cluster_count * 10 + heat_score)
-                return {r[0]: min(100, (r[1] or 0) + (r[2] or 1) * 10) for r in rows}
+                result = {}
+                for r in rows:
+                    lw = _LIFECYCLE_WEIGHTS.get(r["lifecycle_status"], 0.5)
+                    base = min(100, float(r["cluster_heat"] or 0) + (int(r["cluster_count"] or 1) * 10))
+                    result[r[0]] = {
+                        "heat": base,
+                        "lifecycle_weight": lw,
+                        "lifecycle_score": base * lw,
+                    }
+                return result
         except Exception:
             return {}
 
     def _resolve_stock_themes(self, stock_code: str) -> list:
-        """查找股票所属的主题（从 theme_stock_mapping）"""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 rows = conn.execute(
@@ -173,12 +197,23 @@ class ScoringEngine:
         except Exception:
             return []
 
+    def _load_leader_score(self, stock_code: str) -> float:
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                row = conn.execute(
+                    "SELECT leader_score FROM stock_profile WHERE stock_code=?",
+                    (stock_code,)
+                ).fetchone()
+                return float(row[0]) if row and row[0] is not None else 0
+        except Exception:
+            return 0
+
     def _rank(self, stock_data: dict) -> list:
         theme_heat = self._load_theme_heat()
         all_event_ids = list({e["event_id"]
                               for d in stock_data.values()
                               for e in d["events"]})
-        cluster_scores = self._load_cluster_scores(all_event_ids)
+        cluster_data = self._load_cluster_scores(all_event_ids)
 
         results = []
         for code, data in stock_data.items():
@@ -186,19 +221,36 @@ class ScoringEngine:
             benefit_score = max(data["benefit_scores"]) if data["benefit_scores"] else 0
             market_score = max(data["market_scores"]) if data["market_scores"] else 0
 
-            # 主题热度: 取股票所属主题的最大热度
+            # 主题热度(衰减后)
             themes = self._resolve_stock_themes(code)
             theme_heat_val = max((theme_heat.get(t, 0) for t in themes), default=0)
 
-            # 簇热度: 事件所在簇的最高评分（去重）
+            # 簇热度(生命周期加权)
             cluster_max = max(
-                (cluster_scores.get(e["event_id"], 0) for e in data["events"]),
+                (cluster_data.get(e["event_id"], {}).get("lifecycle_score", 0)
+                 for e in data["events"]),
                 default=0
             )
+            # 生命周期系数取最高权重阶段
+            lifecycle_weight = max(
+                (cluster_data.get(e["event_id"], {}).get("lifecycle_weight", 0.5)
+                 for e in data["events"]),
+                default=0.5
+            )
+            lifecycle_score = cluster_max * lifecycle_weight
 
-            total = (event_score * 0.2 + benefit_score * 0.25
-                     + market_score * 0.2 + theme_heat_val * 0.2
-                     + cluster_max * 0.15)
+            # 龙头评分
+            leader_score = self._load_leader_score(code)
+
+            # V3 公式
+            total = (event_score * 0.15 +
+                     benefit_score * 0.20 +
+                     market_score * 0.15 +
+                     theme_heat_val * 0.15 +
+                     cluster_max * 0.10 +
+                     leader_score * 0.15 +
+                     lifecycle_score * 0.10)
+
             top_events = sorted(data["events"], key=lambda x: -x.get("event_id", 0))[:3]
             results.append({
                 "stock_code": code,
@@ -208,6 +260,8 @@ class ScoringEngine:
                 "market_score": market_score,
                 "theme_heat": round(theme_heat_val),
                 "cluster_heat": round(cluster_max),
+                "leader_score": round(leader_score),
+                "lifecycle_weight": round(lifecycle_weight, 2),
                 "financial_score": 0,
                 "technical_score": 0,
                 "capital_score": 0,
@@ -222,6 +276,7 @@ class ScoringEngine:
 
     def _save(self, score_date: str, results: list):
         with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM recommendation_result")
             for r in results:
                 conn.execute("""
                     INSERT INTO stock_score
@@ -238,20 +293,29 @@ class ScoringEngine:
                     r["total_score"], r["event_count"],
                     str(r["top_events"]),
                 ))
-                conn.execute("""
-                    INSERT INTO recommendation_result
-                        (stock_code, stock_name, strategy_type, rank_no, score, recommendation_reason)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (
-                    r["stock_code"], r["stock_name"], "SHORT",
-                    r["rank"], r["total_score"],
-                    f"事件{r['event_score']}*20% + 受益{r['benefit_score']}*25% + "
-                    f"市场{r['market_score']}*20% + 热度{r.get('theme_heat',0)}*20%"
-                ))
+                # 多维策略输出
+                strategies = [
+                    ("HOT", r["total_score"],
+                     f"事件{r['event_score']}*15%+受益(分层){r['benefit_score']}*20%+"
+                     f"市场{r['market_score']}*15%+热度{r['theme_heat']}*15%+"
+                     f"簇{r['cluster_heat']}*10%+龙头{r['leader_score']}*15%+"
+                     f"生命周期{r['lifecycle_weight']}*10%"),
+                ]
+                if r["theme_heat"] >= 50:
+                    strategies.append(("THEME", r["theme_heat"], "热点题材"))
+                if r["lifecycle_weight"] >= 0.8 and r["theme_heat"] < 30:
+                    strategies.append(("LATENT", r["total_score"], "潜伏题材(早期+低热度)"))
+                for stype, score, reason in strategies:
+                    conn.execute("""
+                        INSERT INTO recommendation_result
+                            (stock_code, stock_name, strategy_type, rank_no, score, recommendation_reason)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (r["stock_code"], r["stock_name"], stype,
+                          r["rank"], score, reason))
             conn.commit()
-        print(f"  [评分] 已计算 {len(results)} 只股票的综合评分(V2)")
+        print(f"  [评分] 已计算 {len(results)} 只股票的综合评分(V3)")
 
-    def get_top_stocks(self, limit=20, strategy="SHORT") -> list:
+    def get_top_stocks(self, limit=20, strategy="HOT") -> list:
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("""

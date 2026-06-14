@@ -168,10 +168,17 @@ class StockService:
                     stock_name TEXT NOT NULL,
                     benefit_level INTEGER,
                     benefit_score INTEGER,
+                    benefit_type TEXT DEFAULT 'DIRECT',
+                    benefit_path TEXT,
                     match_reason TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            for col in ("benefit_type", "benefit_path"):
+                try:
+                    conn.execute(f"ALTER TABLE event_stock_mapping ADD COLUMN {col} TEXT")
+                except sqlite3.OperationalError:
+                    pass
             conn.commit()
 
     def _seed_themes(self):
@@ -217,7 +224,7 @@ class StockService:
                     """, (theme_key,)).fetchall()
                     for r in rows:
                         matched.add((r["stock_code"], r["stock_name"],
-                                     r["benefit_level"], r["benefit_reason"]))
+                                     r["benefit_level"], r["benefit_reason"], "keyword"))
 
             # 2. Embedding 语义匹配 (Phase 9)
             try:
@@ -238,16 +245,33 @@ class StockService:
                             """, (theme_key,)).fetchall()
                             for r in rows:
                                 matched.add((r["stock_code"], r["stock_name"],
-                                             r["benefit_level"], r["benefit_reason"]))
+                                             r["benefit_level"], r["benefit_reason"], "embedding"))
                             break
             except Exception:
                 pass
 
-        return [{"stock_code": c, "stock_name": n, "benefit_level": l, "benefit_reason": r}
-                for c, n, l, r in matched]
+        return [{"stock_code": c, "stock_name": n, "benefit_level": l, "benefit_reason": r, "_match_by": m}
+                for c, n, l, r, m in matched]
+
+    def _assign_benefit_type(self, stock: dict, match_source: str) -> str:
+        """根据匹配来源和受益层级分配 benefit_type"""
+        level = stock.get("benefit_level", 3)
+        if match_source == "keyword":
+            return "DIRECT" if level == 1 else "INDIRECT"
+        if match_source == "embedding":
+            return "INDIRECT"
+        return "SENTIMENT"
+
+    def _build_benefit_path(self, stock: dict, match_source: str) -> str:
+        level = stock.get("benefit_level", 3)
+        if match_source == "keyword":
+            return f"关键词匹配(level={level})"
+        if match_source == "embedding":
+            return f"语义匹配(level={level})"
+        return "其他"
 
     def process_event_stocks(self, event_id: int, event: dict):
-        """为事件创建股票关联"""
+        """为事件创建股票关联 — 含受益链分层"""
         matched = self.match_event_to_stocks(event)
         if not matched:
             return
@@ -256,12 +280,18 @@ class StockService:
             for stock in matched:
                 level = stock["benefit_level"]
                 score = benefit_scores.get(level, 40)
+                # 判断 matching source
+                reason = stock.get("benefit_reason", "")
+                src = "embedding" if stock.get("_match_by") == "embedding" else "keyword"
+                btype = self._assign_benefit_type(stock, src)
+                bpath = self._build_benefit_path(stock, src)
                 conn.execute("""
                     INSERT INTO event_stock_mapping
-                        (event_id, stock_code, stock_name, benefit_level, benefit_score, match_reason)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                        (event_id, stock_code, stock_name, benefit_level, benefit_score,
+                         benefit_type, benefit_path, match_reason)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """, (event_id, stock["stock_code"], stock["stock_name"],
-                      level, score, stock["benefit_reason"]))
+                      level, score, btype, bpath, reason))
             conn.commit()
 
     def get_top_stocks(self, hours=24, limit=20) -> list:

@@ -222,15 +222,24 @@ class DashboardScreen(Screen):
         from config import Config
         benefit_scores = {1: 95, 2: 80, 3: 60}
         with sqlite3.connect(Config.STOCKS_DB) as conn:
+            for col in ("benefit_type", "benefit_path"):
+                try:
+                    conn.execute(f"ALTER TABLE event_stock_mapping ADD COLUMN {col} TEXT")
+                except sqlite3.OperationalError:
+                    pass
             for stock in stocks[:10]:
                 level = 1 if stock["score"] >= 85 else (2 if stock["score"] >= 60 else 3)
+                path_count = stock.get("path_count", 1)
+                btype = "DIRECT" if path_count == 1 else ("INDIRECT" if path_count <= 3 else "SENTIMENT")
+                bpath = f"图谱推理(路径{path_count}条,最大权重{stock['score']})"
                 conn.execute("""
                     INSERT OR IGNORE INTO event_stock_mapping
-                        (event_id, stock_code, stock_name, benefit_level, benefit_score, match_reason)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                        (event_id, stock_code, stock_name, benefit_level, benefit_score,
+                         benefit_type, benefit_path, match_reason)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """, (event_id, stock["stock_code"], stock["stock_name"],
                       level, benefit_scores.get(level, 40),
-                      f"图谱推理(路径{stock['path_count']}条,最大权重{stock['score']})"))
+                      btype, bpath, bpath))
             conn.commit()
 
     def _update_top_stocks(self):

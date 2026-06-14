@@ -1,14 +1,18 @@
-"""Dynamic Theme Heat System — Phase 12
+"""Dynamic Theme Heat System — Phase 12 + Phase 2(V3)
 
-实时反映主题热度变化。
+实时反映主题热度变化，含时间衰减。
 公式: HeatScore = 新闻热度(40%) + 板块热度(35%) + 资金热度(25%)
+衰减: decay_heat = raw_heat * exp(-days / 3)  半衰期3天
 """
+import math
 import sqlite3
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 class ThemeHeat:
+    HALF_LIFE_DAYS = 3
+
     def __init__(self, news_db=None, stocks_db=None):
         from config import Config
         self.news_db = news_db or Config.NEWS_DB
@@ -18,22 +22,66 @@ class ThemeHeat:
 
     def calculate(self):
         """计算所有主题的热度并写入 theme_heat 表"""
+        now = datetime.now()
         news_heat = self._news_heat()
         board_heat = self._board_heat()
 
         with sqlite3.connect(self.stocks_db) as conn:
+            # 获取上一次计算的 last_active_time
+            existing = {}
+            try:
+                rows = conn.execute(
+                    "SELECT theme_name, last_active_time, heat_score FROM theme_heat"
+                ).fetchall()
+                for r in rows:
+                    existing[r[0]] = {"last_active": r[1], "prev_heat": r[2] or 0}
+            except Exception:
+                pass
+
+            # 涨停热度 (Phase 4 V3)
+            limitup_heat = {}
+            try:
+                from services.limitup_stats import LimitupStats
+                ls = LimitupStats()
+                ls.calculate()
+                limitup_heat = ls.get_theme_limitup_heat()
+            except Exception:
+                pass
+
             conn.execute("DELETE FROM theme_heat")
-            all_themes = set(news_heat.keys()) | set(board_heat.keys())
+            all_themes = set(news_heat.keys()) | set(board_heat.keys()) | set(limitup_heat.keys())
             for theme in sorted(all_themes):
                 nh = news_heat.get(theme, 0)
                 bh = board_heat.get(theme, 0)
-                heat = int(nh * 0.4 + bh * 0.35 + 0 * 0.25)
+                lh = limitup_heat.get(theme, 0)
+                # V3 公式: 新闻40% + 资金25% + 板块20% + 涨停15%
+                raw_heat = int(nh * 0.40 + bh * 0.20 + 0 * 0.25 + lh * 0.15)
+
+                # 计算 last_active_time
+                prev = existing.get(theme, {})
+                prev_active = prev.get("last_active")
+                if news_heat.get(theme + ":cnt", 0) > 0:
+                    last_active = now.isoformat()
+                elif prev_active:
+                    last_active = prev_active
+                else:
+                    last_active = now.isoformat()
+
+                # 衰减
+                last_dt = datetime.fromisoformat(last_active) if isinstance(last_active, str) else now
+                days_since = max(0, (now - last_dt).total_seconds() / 86400)
+                decay = raw_heat * math.exp(-days_since / self.HALF_LIFE_DAYS) if raw_heat else 0
+
                 conn.execute("""
                     INSERT INTO theme_heat
-                        (theme_name, heat_score, mention_count, board_change, board_volume)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (theme, heat, news_heat.get(theme + ":cnt", 0),
-                      board_heat.get(theme + ":chg", 0), board_heat.get(theme + ":vol", 0)))
+                        (theme_name, heat_score, decay_heat, mention_count,
+                         board_change, board_volume, last_active_time)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (theme, raw_heat, round(decay, 1),
+                      news_heat.get(theme + ":cnt", 0),
+                      board_heat.get(theme + ":chg", 0),
+                      board_heat.get(theme + ":vol", 0),
+                      last_active))
             conn.commit()
             return all_themes
 
@@ -87,7 +135,6 @@ class ThemeHeat:
                     vol = r["volume"] or 0
                     up = r["up"] or 0
                     down = r["down"] or 1
-                    # 板块热度: 涨跌幅(0-40) + 涨跌比(0-30) + 成交额(0-30)
                     chg_score = 40 * abs(chg) / max_chg if max_chg else 0
                     ratio = up / (up + down)
                     ratio_score = 30 * ratio
@@ -103,6 +150,6 @@ class ThemeHeat:
         with sqlite3.connect(self.stocks_db) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("""
-                SELECT * FROM theme_heat ORDER BY heat_score DESC LIMIT ?
+                SELECT * FROM theme_heat ORDER BY decay_heat DESC LIMIT ?
             """, (limit,)).fetchall()
             return [dict(r) for r in rows]

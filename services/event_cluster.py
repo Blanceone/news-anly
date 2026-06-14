@@ -31,7 +31,7 @@ class EventClustering:
         jieba.initialize()
 
     def cluster_event(self, event_id: int, title: str, content: str = ""):
-        """为新事件寻找匹配的簇，若未匹配则创建新簇"""
+        """为新事件寻找匹配的簇，若未匹配则创建新簇（含生命周期管理）"""
         text = f"{title} {content}"[:500]
         if not text.strip():
             return None
@@ -53,11 +53,68 @@ class EventClustering:
                             continue
                         sim = float(np.dot(new_vec, old_vec / onorm))
                         if sim >= 0.3:
-                            self._add_to_cluster(r["cluster_id"], event_id)
-                            return r["cluster_id"]
+                            cid = self._add_to_cluster(int(r["cluster_id"]), event_id)
+                            if cid:
+                                self._update_lifecycle(cid)
+                            return cid
             except Exception:
                 pass
-        return self._create_cluster(event_id)
+        cid = self._create_cluster(event_id)
+        if cid:
+            self._set_birth(cid)
+        return cid
+
+    def _set_birth(self, cluster_id):
+        with sqlite3.connect(self.stocks_db) as conn:
+            conn.execute("""
+                UPDATE event_cluster SET birth_time=CURRENT_TIMESTAMP, status='BIRTH'
+                WHERE cluster_id=?
+            """, (cluster_id,))
+            conn.commit()
+
+    def _update_lifecycle(self, cluster_id):
+        """根据event_count和时间更新生命周期状态"""
+        import datetime
+        now = datetime.datetime.now()
+        with sqlite3.connect(self.stocks_db) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("""
+                SELECT event_count, first_seen, last_seen, status
+                FROM event_cluster WHERE cluster_id=?
+            """, (cluster_id,)).fetchone()
+            if not row:
+                return
+            cnt = row["event_count"]
+            first = datetime.datetime.fromisoformat(row["first_seen"]) if row["first_seen"] else now
+            last = datetime.datetime.fromisoformat(row["last_seen"]) if row["last_seen"] else now
+            status = row["status"] or "BIRTH"
+            hours_since_last = (now - last).total_seconds() / 3600
+            hours_since_birth = (now - first).total_seconds() / 3600
+
+            if cnt >= 10 and status in ("BIRTH", "GROWING", "PEAK"):
+                new_status = "PEAK"
+            elif cnt >= 3 and status in ("BIRTH", "GROWING"):
+                new_status = "GROWING"
+            elif hours_since_last > 72:
+                new_status = "DEAD"
+            elif hours_since_last > 24 and status not in ("DEAD",):
+                new_status = "DECLINING"
+            elif cnt >= 3 and status == "BIRTH":
+                new_status = "GROWING"
+            else:
+                new_status = status
+
+            updates = {"status": new_status}
+            if new_status == "GROWING" and status == "BIRTH":
+                pass  # growing starts from birth
+            if new_status == "DECLINING" and status != "DECLINING":
+                updates["decline_time"] = now.isoformat()
+
+            if updates:
+                set_clause = ", ".join(f"{k}=?" for k in updates)
+                vals = list(updates.values()) + [cluster_id]
+                conn.execute(f"UPDATE event_cluster SET {set_clause} WHERE cluster_id=?", vals)
+                conn.commit()
 
     def _get_recent_events(self, hours=48):
         try:
@@ -104,6 +161,7 @@ class EventClustering:
                 WHERE cluster_id = ?
             """, (cluster_id,))
             conn.commit()
+            return cluster_id
 
     def get_cluster_score(self, event_id):
         """获取事件所在簇的最高事件评分（去重用）"""
