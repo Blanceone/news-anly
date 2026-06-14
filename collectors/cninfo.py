@@ -46,7 +46,8 @@ def collect(config: dict, since: datetime = None) -> list:
                 "url": f"http://static.cninfo.com.cn/{adjunct_url}" if adjunct_url else "",
                 "source": "cninfo",
                 "source_name": "巨潮资讯",
-                "created_at": ann_time,
+                "created_at": datetime.now(),
+                "announcement_date": ann_time,
             })
 
         total_pages = (data.get("totalAnnouncement", 0) + params["pageSize"] - 1) // params["pageSize"]
