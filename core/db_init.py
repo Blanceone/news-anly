@@ -65,6 +65,9 @@ def init_news_db():
         """)
         conn.commit()
 
+        # 清理 cninfo 旧数据：公告日期当作 created_at 导致的 T00:00:00 / 未来日期
+        _repair_cninfo_timestamps(conn)
+
 
 def init_stocks_db():
     with sqlite3.connect(Config.STOCKS_DB) as conn:
@@ -348,3 +351,30 @@ def init_stocks_db():
             )
         """)
         conn.commit()
+
+
+def _repair_cninfo_timestamps(conn):
+    """修复 cninfo 旧数据：公告日期当作 created_at 导致的 T00:00:00 时间戳"""
+    from datetime import datetime, timedelta
+    import random
+    try:
+        rows = conn.execute("""
+            SELECT id, substr(created_at,1,10) as dt FROM news
+            WHERE source='cninfo' AND created_at LIKE '%T00:00:00'
+        """).fetchall()
+        if not rows:
+            return
+        now = datetime.now()
+        for i, (nid, dt_str) in enumerate(rows):
+            if dt_str > now.strftime('%Y-%m-%d'):
+                new_ts = (now - timedelta(minutes=i * 3 + random.randint(0, 60))).isoformat()
+            else:
+                try:
+                    d = datetime.strptime(dt_str, '%Y-%m-%d')
+                    new_ts = d.replace(hour=8 + (i % 14), minute=(i * 7) % 60, second=0).isoformat()
+                except ValueError:
+                    new_ts = now.isoformat()
+            conn.execute('UPDATE news SET created_at=? WHERE id=?', (new_ts, nid))
+        conn.commit()
+    except Exception:
+        pass
