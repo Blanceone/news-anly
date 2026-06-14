@@ -85,10 +85,28 @@ class ThemeHeat:
             conn.commit()
             return all_themes
 
+    def _known_themes(self) -> set:
+        """从 theme_stock_mapping + stock_basic.industry 获取已知主题"""
+        known = set()
+        try:
+            with sqlite3.connect(self.stocks_db) as conn:
+                rows = conn.execute(
+                    "SELECT DISTINCT theme_name FROM theme_stock_mapping"
+                ).fetchall()
+                known.update(r[0] for r in rows)
+                rows = conn.execute(
+                    "SELECT DISTINCT industry FROM stock_basic WHERE industry IS NOT NULL"
+                ).fetchall()
+                known.update(r[0] for r in rows)
+        except Exception:
+            pass
+        return known
+
     def _news_heat(self) -> dict:
-        """过去24h提及次数 + event_score 总和"""
+        """过去24h提及次数 + event_score 总和（仅统计已知主题）"""
         heat = defaultdict(float)
         counts = defaultdict(int)
+        known = self._known_themes()
         try:
             with sqlite3.connect(self.news_db) as conn:
                 conn.row_factory = sqlite3.Row
@@ -100,16 +118,22 @@ class ThemeHeat:
                 for r in rows:
                     industry = (r["industry"] or "").strip()
                     score = r["event_score"] or 0
-                    if industry:
+                    if industry and industry in known:
                         heat[industry] += score
                         counts[industry] += 1
                     try:
-                        import json
+                        import json, re
                         kws = json.loads(r["keywords_json"] or "[]")
                         for kw in kws:
-                            if len(kw) > 1:
-                                heat[kw] += score * 0.5
-                                counts[kw] += 1
+                            kw = kw.strip()
+                            if len(kw) <= 1 or kw not in known:
+                                continue
+                            if re.match(r'^\d+[\.\d]*%?$', kw):
+                                continue
+                            if kw.endswith(':cnt'):
+                                continue
+                            heat[kw] += score * 0.5
+                            counts[kw] += 1
                     except Exception:
                         pass
         except Exception:

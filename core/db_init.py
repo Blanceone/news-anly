@@ -252,11 +252,31 @@ def init_stocks_db():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        for col_type in (("decay_heat", "REAL"), ("last_active_time", "TEXT")):
-            try:
-                conn.execute(f"ALTER TABLE theme_heat ADD COLUMN {col_type[0]} {col_type[1]}")
-            except sqlite3.OperationalError:
-                pass
+        # Fix TEXT→REAL for decay_heat (early version used TEXT)
+        try:
+            col_info = conn.execute("PRAGMA table_info(theme_heat)").fetchall()
+            dhtype = next((r[2] for r in col_info if r[1] == "decay_heat"), "")
+            if dhtype and dhtype.upper() == "TEXT":
+                conn.execute("DROP TABLE IF EXISTS theme_heat_tmp")
+                conn.execute("CREATE TABLE theme_heat_tmp AS SELECT * FROM theme_heat")
+                conn.execute("DROP TABLE theme_heat")
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS theme_heat (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        theme_name TEXT NOT NULL,
+                        heat_score REAL DEFAULT 0,
+                        decay_heat REAL DEFAULT 0,
+                        mention_count INTEGER DEFAULT 0,
+                        board_change REAL DEFAULT 0,
+                        board_volume REAL DEFAULT 0,
+                        last_active_time TEXT,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                conn.execute("INSERT OR IGNORE INTO theme_heat(theme_name,heat_score,decay_heat,mention_count,board_change,board_volume,last_active_time) SELECT theme_name,heat_score,CAST(decay_heat AS REAL),mention_count,board_change,board_volume,last_active_time FROM theme_heat_tmp")
+                conn.execute("DROP TABLE theme_heat_tmp")
+        except Exception:
+            pass
         conn.execute("""
             CREATE TABLE IF NOT EXISTS stock_profile (
                 stock_code TEXT PRIMARY KEY,

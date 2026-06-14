@@ -163,6 +163,7 @@ class ScoringEngine:
             return {}
         try:
             with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
                 placeholders = ",".join("?" for _ in event_ids)
                 rows = conn.execute(f"""
                     SELECT m.event_id,
@@ -187,15 +188,24 @@ class ScoringEngine:
             return {}
 
     def _resolve_stock_themes(self, stock_code: str) -> list:
+        themes = []
         try:
             with sqlite3.connect(self.db_path) as conn:
                 rows = conn.execute(
                     "SELECT theme_name FROM theme_stock_mapping WHERE stock_code=?",
                     (stock_code,)
                 ).fetchall()
-                return [r[0] for r in rows]
+                themes = [r[0] for r in rows]
+                # 补充 stock_basic.industry
+                row = conn.execute(
+                    "SELECT industry FROM stock_basic WHERE stock_code=?",
+                    (stock_code,)
+                ).fetchone()
+                if row and row[0] and row[0] not in themes:
+                    themes.append(row[0])
         except Exception:
-            return []
+            pass
+        return themes
 
     def _load_leader_score(self, stock_code: str) -> float:
         try:
@@ -231,7 +241,6 @@ class ScoringEngine:
                  for e in data["events"]),
                 default=0
             )
-            # 生命周期系数取最高权重阶段
             lifecycle_weight = max(
                 (cluster_data.get(e["event_id"], {}).get("lifecycle_weight", 0.5)
                  for e in data["events"]),

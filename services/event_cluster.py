@@ -71,6 +71,7 @@ class EventClustering:
                 WHERE cluster_id=?
             """, (cluster_id,))
             conn.commit()
+        self._set_cluster_heat(cluster_id)
 
     def _update_lifecycle(self, cluster_id):
         """根据event_count和时间更新生命周期状态"""
@@ -150,6 +151,26 @@ class EventClustering:
             conn.commit()
             return cluster_id
 
+    def _set_cluster_heat(self, cluster_id):
+        """根据簇内事件评分更新 heat_score"""
+        try:
+            with sqlite3.connect(self.stocks_db) as conn:
+                row = conn.execute("""
+                    SELECT COALESCE(MAX(e.event_score), 0) as max_score,
+                           COUNT(*) as cnt
+                    FROM event_cluster_map m
+                    JOIN event_analysis e ON m.event_id = e.event_id
+                    WHERE m.cluster_id=?
+                """, (cluster_id,)).fetchone()
+                if row:
+                    max_score = float(row[0]) if row[0] else 0
+                    cnt = int(row[1]) if row[1] else 0
+                    heat = min(100, max_score + cnt * 5)
+                    conn.execute("UPDATE event_cluster SET heat_score=? WHERE cluster_id=?", (heat, cluster_id))
+                    conn.commit()
+        except Exception:
+            pass
+
     def _add_to_cluster(self, cluster_id, event_id):
         with sqlite3.connect(self.stocks_db) as conn:
             conn.execute("""
@@ -161,7 +182,8 @@ class EventClustering:
                 WHERE cluster_id = ?
             """, (cluster_id,))
             conn.commit()
-            return cluster_id
+        self._set_cluster_heat(cluster_id)
+        return cluster_id
 
     def get_cluster_score(self, event_id):
         """获取事件所在簇的最高事件评分（去重用）"""
