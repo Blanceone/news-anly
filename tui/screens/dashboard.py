@@ -6,7 +6,7 @@ from textual.containers import Horizontal, Vertical, ScrollableContainer
 from textual.screen import Screen
 from textual.widgets import Header, Footer, Static, DataTable
 
-from tui.db import TuiDB
+from tui.db import TuiDB, to_bjt
 
 
 class DashboardScreen(Screen):
@@ -89,10 +89,11 @@ class DashboardScreen(Screen):
         self.db = TuiDB()
         self.last_fetch = datetime.now()
         self._init_tables()
-        self._analyze_startup()
         self._refresh()
         self.set_interval(10, self._refresh)
         self.set_interval(30, self._background_fetch)
+        # 后台启动分析，不阻塞 UI
+        asyncio.create_task(self._async_startup())
 
     def _repair_stock_mappings(self):
         import sqlite3, json
@@ -129,6 +130,10 @@ class DashboardScreen(Screen):
                 pass
         ScoringEngine().calculate(hours=72)
 
+    async def _async_startup(self):
+        await asyncio.to_thread(self._analyze_startup)
+        self._refresh()
+
     def _analyze_startup(self):
         from collectors import NewsCollector
         collector = NewsCollector()
@@ -136,7 +141,6 @@ class DashboardScreen(Screen):
         if backlog:
             self._analyze_items([], backlog)
         self._repair_stock_mappings()
-        self._refresh()
 
     def _init_tables(self):
         self.query_one("#top-stocks-table", DataTable).add_columns("#", "code", "name", "score", "evt", "bnf", "mkt")
@@ -267,7 +271,7 @@ class DashboardScreen(Screen):
             return
         lines = []
         for n in items:
-            ts = (n.get("created_at") or "")[11:19] if n.get("created_at") else ""
+            ts = to_bjt(n.get("created_at", "")) or ""
             lines.append(f"{ts} {n['title'][:70]}")
         widget.update("\n".join(lines))
 
