@@ -675,3 +675,84 @@ class TuiDB:
                 return [dict(r) for r in rows]
         except Exception:
             return []
+
+    # ---- V3 TUI pages ----
+
+    def theme_heat_list(self, limit=30):
+        try:
+            with self._sconn() as conn:
+                rows = conn.execute("""
+                    SELECT theme_name, raw_heat, decay_heat, board_change,
+                           board_volume, up_stock_count, down_stock_count,
+                           limitup_count, heat, last_active_time
+                    FROM theme_heat
+                    ORDER BY decay_heat DESC LIMIT ?
+                """, (limit,)).fetchall()
+                return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    def lifecycle_stats(self):
+        try:
+            with self._sconn() as conn:
+                rows = conn.execute("""
+                    SELECT status, COUNT(*) as cnt,
+                           ROUND(AVG(event_count), 1) as avg_events
+                    FROM event_cluster
+                    WHERE status IS NOT NULL
+                    GROUP BY status ORDER BY status
+                """).fetchall()
+                return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    def lifecycle_clusters(self, status=None, limit=20):
+        try:
+            with self._sconn() as conn:
+                if status:
+                    rows = conn.execute("""
+                        SELECT * FROM event_cluster
+                        WHERE status=? ORDER BY event_count DESC LIMIT ?
+                    """, (status, limit)).fetchall()
+                else:
+                    rows = conn.execute("""
+                        SELECT * FROM event_cluster
+                        ORDER BY event_count DESC LIMIT ?
+                    """, (limit,)).fetchall()
+                return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    def stock_profile_list(self, limit=30):
+        try:
+            with self._sconn() as conn:
+                rows = conn.execute("""
+                    SELECT * FROM stock_profile
+                    ORDER BY leader_score DESC LIMIT ?
+                """, (limit,)).fetchall()
+                return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    def backtest_results(self, limit=20):
+        try:
+            with self._sconn() as conn:
+                rows = conn.execute("""
+                    SELECT * FROM backtest_result
+                    ORDER BY created_at DESC LIMIT ?
+                """, (limit,)).fetchall()
+                return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    def backtest_trades_by_id(self, bt_id, limit=50):
+        try:
+            with self._sconn() as conn:
+                rows = conn.execute("""
+                    SELECT * FROM backtest_trades
+                    WHERE backtest_id=?
+                    ORDER BY return_rate DESC LIMIT ?
+                """, (bt_id, limit)).fetchall()
+                return [dict(r) for r in rows]
+        except Exception:
+            return []

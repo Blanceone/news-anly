@@ -17,6 +17,10 @@ from tui.screens.stock_view import StockViewScreen
 from tui.screens.event_view import EventViewScreen
 from tui.screens.discovery_view import DiscoveryViewScreen
 from tui.screens.cluster_view import ClusterViewScreen
+from tui.screens.theme_heat_view import ThemeHeatScreen
+from tui.screens.lifecycle_view import LifecycleScreen
+from tui.screens.profile_view import ProfileScreen
+from tui.screens.backtest_view import BacktestScreen
 
 
 class StockTUI(App):
@@ -27,6 +31,10 @@ class StockTUI(App):
         "events": EventViewScreen,
         "discovery": DiscoveryViewScreen,
         "clusters": ClusterViewScreen,
+        "heat": ThemeHeatScreen,
+        "lifecycle": LifecycleScreen,
+        "profile": ProfileScreen,
+        "backtest": BacktestScreen,
     }
     BINDINGS = [
         Binding("1", "switch('dashboard')", "看板"),
@@ -35,6 +43,10 @@ class StockTUI(App):
         Binding("4", "switch('events')", "事件"),
         Binding("5", "switch('discovery')", "发现"),
         Binding("6", "switch('clusters')", "簇"),
+        Binding("7", "switch('heat')", "热度"),
+        Binding("8", "switch('lifecycle')", "周期"),
+        Binding("9", "switch('profile')", "画像"),
+        Binding("0", "switch('backtest')", "回测"),
         Binding("q", "quit", "退出"),
         Binding("r", "refresh", "刷新"),
     ]
@@ -69,12 +81,16 @@ class StockTUI(App):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="top-bar"):
-            yield Static(" [1] 看板 ", id="tab-dashboard", classes="tab-item active")
-            yield Static(" [2] 板块 ", id="tab-themes", classes="tab-item")
-            yield Static(" [3] 股票 ", id="tab-stocks", classes="tab-item")
-            yield Static(" [4] 事件 ", id="tab-events", classes="tab-item")
-            yield Static(" [5] 发现 ", id="tab-discovery", classes="tab-item")
-            yield Static(" [6] 簇 ", id="tab-clusters", classes="tab-item")
+            yield Static(" [1]看板 ", id="tab-dashboard", classes="tab-item active")
+            yield Static(" [2]板块 ", id="tab-themes", classes="tab-item")
+            yield Static(" [3]股票 ", id="tab-stocks", classes="tab-item")
+            yield Static(" [4]事件 ", id="tab-events", classes="tab-item")
+            yield Static(" [5]发现 ", id="tab-discovery", classes="tab-item")
+            yield Static(" [6]簇   ", id="tab-clusters", classes="tab-item")
+            yield Static(" [7]热度 ", id="tab-heat", classes="tab-item")
+            yield Static(" [8]周期 ", id="tab-lifecycle", classes="tab-item")
+            yield Static(" [9]画像 ", id="tab-profile", classes="tab-item")
+            yield Static(" [0]回测 ", id="tab-backtest", classes="tab-item")
             yield Static("", id="clock")
         yield Footer()
 
@@ -89,7 +105,8 @@ class StockTUI(App):
 
     def action_switch(self, screen_name: str):
         self.push_screen(screen_name)
-        all_tabs = ["dashboard", "themes", "stocks", "events", "discovery", "clusters"]
+        all_tabs = ["dashboard", "themes", "stocks", "events", "discovery",
+                     "clusters", "heat", "lifecycle", "profile", "backtest"]
         for name in all_tabs:
             w = self.query_one(f"#tab-{name}", Static)
             w.remove_class("active")

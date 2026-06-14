@@ -27,7 +27,7 @@ def run_init():
     print(f"数据源: {len(Config.NEWS_SOURCES)} 个")
     print(f"数据保留: {Config.DATA_RETENTION_HOURS} 小时")
     print(f"采集间隔: {Config.FETCH_INTERVAL_SECONDS} 秒")
-    print(f"事件识别: {'已启用 (AI)' if _detect_provider().startswith('Google') else '未启用 (需配置API)'}")
+    print(f"事件识别: {'已启用 (AI)' if not _detect_provider().startswith('未配置') else '未启用 (需配置API)'}")
     print(f"股票映射: AI/算力/半导体/机器人/创新药 (共31只)")
     kg_count = _kg_count()
     print(f"知识图谱: {'已加载' if kg_count else '空'} ({kg_count}个实体)")
