@@ -78,6 +78,13 @@ class NewsScheduler:
         else:
             print("  无评分数据")
 
+        # Phase 12: 更新主题热度
+        try:
+            from services.theme_heat import ThemeHeat
+            ThemeHeat().calculate()
+        except Exception:
+            pass
+
         print(f"  [完成] 本次采集")
         return bool(new_news)
 

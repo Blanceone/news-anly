@@ -1,11 +1,8 @@
-"""评分系统 — Phase 5
+"""评分系统 — Phase 13
 
-V1 公式：
-  TotalScore = EventScore × 40% + BenefitScore × 60%
-
-全量公式（预留）：
-  TotalScore = 事件强度×20% + 受益程度×30% + 市场验证×20%
-             + 财务质量×15% + 技术趋势×10% + 资金流向×5%
+V2 公式：
+  TotalScore = EventScore×20% + BenefitScore×25% + MarketScore×20%
+             + ThemeHeat×20% + ClusterHeat×15%
 """
 import sqlite3
 from collections import defaultdict
@@ -136,13 +133,72 @@ class ScoringEngine:
             s["event_count"] += 1
         return dict(stocks)
 
+    def _load_theme_heat(self) -> dict:
+        """加载主题热度 {theme_name: heat_score}"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                rows = conn.execute("SELECT theme_name, heat_score FROM theme_heat").fetchall()
+                return {r[0]: (r[1] or 0) for r in rows}
+        except Exception:
+            return {}
+
+    def _load_cluster_scores(self, event_ids: list) -> dict:
+        """加载事件簇热度 {event_id: cluster_heat_score}"""
+        if not event_ids:
+            return {}
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                placeholders = ",".join("?" for _ in event_ids)
+                rows = conn.execute(f"""
+                    SELECT m.event_id, c.heat_score as cluster_heat,
+                           c.event_count as cluster_count
+                    FROM event_cluster_map m
+                    JOIN event_cluster c ON m.cluster_id = c.cluster_id
+                    WHERE m.event_id IN ({placeholders})
+                """, event_ids).fetchall()
+                # cluster_heat = min(100, cluster_count * 10 + heat_score)
+                return {r[0]: min(100, (r[1] or 0) + (r[2] or 1) * 10) for r in rows}
+        except Exception:
+            return {}
+
+    def _resolve_stock_themes(self, stock_code: str) -> list:
+        """查找股票所属的主题（从 theme_stock_mapping）"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                rows = conn.execute(
+                    "SELECT theme_name FROM theme_stock_mapping WHERE stock_code=?",
+                    (stock_code,)
+                ).fetchall()
+                return [r[0] for r in rows]
+        except Exception:
+            return []
+
     def _rank(self, stock_data: dict) -> list:
+        theme_heat = self._load_theme_heat()
+        all_event_ids = list({e["event_id"]
+                              for d in stock_data.values()
+                              for e in d["events"]})
+        cluster_scores = self._load_cluster_scores(all_event_ids)
+
         results = []
         for code, data in stock_data.items():
             event_score = max(data["event_scores"]) if data["event_scores"] else 0
             benefit_score = max(data["benefit_scores"]) if data["benefit_scores"] else 0
             market_score = max(data["market_scores"]) if data["market_scores"] else 0
-            total = event_score * 0.3 + benefit_score * 0.4 + market_score * 0.3
+
+            # 主题热度: 取股票所属主题的最大热度
+            themes = self._resolve_stock_themes(code)
+            theme_heat_val = max((theme_heat.get(t, 0) for t in themes), default=0)
+
+            # 簇热度: 事件所在簇的最高评分（去重）
+            cluster_max = max(
+                (cluster_scores.get(e["event_id"], 0) for e in data["events"]),
+                default=0
+            )
+
+            total = (event_score * 0.2 + benefit_score * 0.25
+                     + market_score * 0.2 + theme_heat_val * 0.2
+                     + cluster_max * 0.15)
             top_events = sorted(data["events"], key=lambda x: -x.get("event_id", 0))[:3]
             results.append({
                 "stock_code": code,
@@ -150,6 +206,8 @@ class ScoringEngine:
                 "event_score": event_score,
                 "benefit_score": benefit_score,
                 "market_score": market_score,
+                "theme_heat": round(theme_heat_val),
+                "cluster_heat": round(cluster_max),
                 "financial_score": 0,
                 "technical_score": 0,
                 "capital_score": 0,
@@ -187,10 +245,11 @@ class ScoringEngine:
                 """, (
                     r["stock_code"], r["stock_name"], "SHORT",
                     r["rank"], r["total_score"],
-                    f"事件{r['event_score']}*30% + 受益{r['benefit_score']}*40% + 市场{r['market_score']}*30%",
+                    f"事件{r['event_score']}*20% + 受益{r['benefit_score']}*25% + "
+                    f"市场{r['market_score']}*20% + 热度{r.get('theme_heat',0)}*20%"
                 ))
             conn.commit()
-        print(f"  [评分] 已计算 {len(results)} 只股票的评分")
+        print(f"  [评分] 已计算 {len(results)} 只股票的综合评分(V2)")
 
     def get_top_stocks(self, limit=20, strategy="SHORT") -> list:
         with sqlite3.connect(self.db_path) as conn:
