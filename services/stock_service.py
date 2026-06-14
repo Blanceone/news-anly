@@ -196,8 +196,8 @@ class StockService:
         print(f"  [股票] 已初始化 {sum(len(t['stocks']) for t in INITIAL_THEMES.values())} 条主题映射")
 
     def match_event_to_stocks(self, event: dict) -> list:
-        """根据事件的关键词/行业匹配主题和股票"""
-        matched = []
+        """根据事件的关键词/行业匹配主题和股票 — 关键词+Embedding双匹配"""
+        matched = set()
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             keywords = [k.lower() for k in event.get("keywords", [])]
@@ -205,6 +205,7 @@ class StockService:
             sub_industry = (event.get("sub_industry") or "").lower()
             all_text = f"{industry} {sub_industry} {' '.join(keywords)}"
 
+            # 1. 关键词匹配
             for theme_key, theme_data in INITIAL_THEMES.items():
                 theme_kws = [kw.lower() for kw in theme_data["keywords"]]
                 if any(kw in all_text for kw in theme_kws):
@@ -215,8 +216,35 @@ class StockService:
                         ORDER BY benefit_level ASC
                     """, (theme_key,)).fetchall()
                     for r in rows:
-                        matched.append(dict(r))
-        return matched
+                        matched.add((r["stock_code"], r["stock_name"],
+                                     r["benefit_level"], r["benefit_reason"]))
+
+            # 2. Embedding 语义匹配 (Phase 9)
+            try:
+                from services.embedding_service import EmbeddingService
+                em = EmbeddingService()
+                emb_matches = em.match_event(event.get("keywords", []),
+                                              event.get("industry", ""),
+                                              event.get("sub_industry", ""))
+                for m in emb_matches:
+                    tname = m["theme_name"]
+                    for theme_key, theme_data in INITIAL_THEMES.items():
+                        if theme_data["name"] == tname:
+                            rows = conn.execute("""
+                                SELECT stock_code, stock_name, benefit_level, benefit_reason
+                                FROM theme_stock_mapping
+                                WHERE theme_key=?
+                                ORDER BY benefit_level ASC
+                            """, (theme_key,)).fetchall()
+                            for r in rows:
+                                matched.add((r["stock_code"], r["stock_name"],
+                                             r["benefit_level"], r["benefit_reason"]))
+                            break
+            except Exception:
+                pass
+
+        return [{"stock_code": c, "stock_name": n, "benefit_level": l, "benefit_reason": r}
+                for c, n, l, r in matched]
 
     def process_event_stocks(self, event_id: int, event: dict):
         """为事件创建股票关联"""

@@ -10,6 +10,8 @@ import sqlite3
 from datetime import datetime
 
 from services.llm_client import LLMClient
+from services.theme_discovery import ThemeDiscovery
+from services.event_cluster import EventClustering
 
 EVENT_TYPE_DEFS = """
 事件类型（必填，选一个）：
@@ -190,6 +192,7 @@ class EventService:
 
     def process_news_item(self, news_item: dict) -> dict:
         result = self.extract(news_item["title"], news_item.get("content", ""))
+        event_id = None
         with sqlite3.connect(self.news_db) as conn:
             conn.execute("""
                 INSERT INTO event_analysis
@@ -210,6 +213,7 @@ class EventService:
                 result["ai_summary"], result["reason"],
                 result.get("raw_response", ""),
             ))
+            event_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
             conn.execute("""
                 UPDATE news SET sentiment=?, category=?, impact=?, ai_analysis=?, updated_at=?
                 WHERE id=?
@@ -218,6 +222,22 @@ class EventService:
                 result["event_score"], result["ai_summary"],
                 datetime.now().isoformat(), news_item["id"],
             ))
+        # Phase 8: Theme Discovery — 从关键词中发现新概念
+        if result.get("keywords"):
+            try:
+                td = ThemeDiscovery()
+                td.discover(result["keywords"], result.get("industry", ""))
+            except Exception:
+                pass
+        # Phase 10: Event Clustering — 相似事件归簇
+        if event_id and news_item.get("title"):
+            try:
+                ec = EventClustering()
+                ec.cluster_event(event_id, news_item["title"],
+                                 news_item.get("content", ""))
+            except Exception:
+                pass
+        result["_event_id"] = event_id
         return result
 
     def get_recent_events(self, hours=24, limit=50) -> list:

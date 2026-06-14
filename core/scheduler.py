@@ -112,6 +112,7 @@ class NewsScheduler:
         """修补已分析但缺少股票映射的事件"""
         import sqlite3
         from config import Config
+        from services.theme_discovery import ThemeDiscovery
         with sqlite3.connect(Config.STOCKS_DB) as sconn:
             mapped = {r[0] for r in sconn.execute("SELECT DISTINCT event_id FROM event_stock_mapping").fetchall()}
         with sqlite3.connect(Config.NEWS_DB) as nconn:
@@ -126,6 +127,7 @@ class NewsScheduler:
         if not unmapped:
             return
         print(f"  [修复] 发现 {len(unmapped)} 个事件缺少股票映射，正在处理...")
+        td = ThemeDiscovery()
         for i, event in enumerate(unmapped, 1):
             try:
                 eid = event["event_id"]
@@ -136,6 +138,7 @@ class NewsScheduler:
                 kg_result = self.knowledge_graph.reason(keywords, industry)
                 self._save_kg_result(eid, kg_result)
                 self.market_verifier.verify_event(eid, industry, keywords)
+                td.discover(keywords, industry)
                 if i % 20 == 0:
                     print(f"  [修复] {i}/{len(unmapped)}")
             except Exception as e:

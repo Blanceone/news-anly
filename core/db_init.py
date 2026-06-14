@@ -186,4 +186,52 @@ def init_stocks_db():
                 UNIQUE(source_type, source_name, stock_code)
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS theme_candidate (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                theme_name TEXT NOT NULL UNIQUE,
+                first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                mention_count INTEGER DEFAULT 1,
+                heat_score REAL DEFAULT 0,
+                status TEXT DEFAULT 'candidate'
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS theme_embedding (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                theme_name TEXT NOT NULL UNIQUE,
+                description TEXT,
+                embedding BLOB
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS event_cluster (
+                cluster_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                main_event_id INTEGER,
+                event_count INTEGER DEFAULT 1,
+                first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                heat_score REAL DEFAULT 0
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS event_cluster_map (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cluster_id INTEGER NOT NULL,
+                event_id INTEGER NOT NULL UNIQUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS theme_heat (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                theme_name TEXT NOT NULL,
+                heat_score REAL DEFAULT 0,
+                mention_count INTEGER DEFAULT 0,
+                board_change REAL DEFAULT 0,
+                board_volume REAL DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         conn.commit()
