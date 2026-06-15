@@ -24,7 +24,7 @@ class ThemeHeatScreen(Screen):
         from tui.db import TuiDB
         self.db = TuiDB()
         table = self.query_one("#heat-table", DataTable)
-        table.add_columns("主题", "原始热度", "衰减热度", "涨跌幅", "成交额(亿)", "涨停数")
+        table.add_columns("主题", "原始热度", "衰减热度", "涨跌幅", "成交额(亿)", "提及次数")
         self._refresh()
         self.set_interval(30, self._refresh)
 
@@ -35,9 +35,9 @@ class ThemeHeatScreen(Screen):
         for r in rows:
             table.add_row(
                 str(r.get("theme_name", ""))[:20],
-                str(int(r.get("raw_heat", r.get("heat", 0)))),
+                str(int(r.get("heat_score", 0))),
                 str(int(r.get("decay_heat", 0))),
                 f"{r.get('board_change', 0):+.2f}%",
                 str(r.get("board_volume", 0)),
-                str(int(r.get("limitup_count", 0))),
+                str(r.get("mention_count", 0)),
             )

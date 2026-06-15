@@ -12,6 +12,17 @@ import re
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 
+# 模块级单例缓存，避免每次调用重建 vectorizer
+_singleton = None
+
+
+def get_embedding_service(db_path=None):
+    """获取 EmbeddingService 单例"""
+    global _singleton
+    if _singleton is None:
+        _singleton = EmbeddingService(db_path)
+    return _singleton
+
 
 class EmbeddingService:
     def __init__(self, db_path=None):

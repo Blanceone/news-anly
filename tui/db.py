@@ -71,8 +71,9 @@ class TuiDB:
             return [dict(r) for r in rows]
 
     def _tushare_pro(self):
-        import tushare as ts, config
-        return ts.pro_api(config.Config().TUSHARE_TOKEN)
+        import tushare as ts
+        from config import Config
+        return ts.pro_api(Config.TUSHARE_TOKEN)
 
     def all_sectors(self):
         """行业板块数据 — Tushare主力 + KG主题 + AKShare补充 + DB缓存"""

@@ -42,7 +42,7 @@ class NewsScheduler:
             try:
                 event = self.event_service.process_news_item(item)
                 analyzed_ids.append(item["id"])
-                event_id = self._get_last_event_id()
+                event_id = event.get("_event_id")
                 if event_id:
                     self.stock_service.process_event_stocks(event_id, event)
                     kg_result = self.knowledge_graph.reason(
@@ -82,17 +82,16 @@ class NewsScheduler:
         try:
             from services.theme_heat import ThemeHeat
             ThemeHeat().calculate()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  [主题热度] 更新失败: {e}")
 
         # Phase 3 (V3): 更新股票画像（仅在交易日）
         try:
-            import datetime as _dt
-            if _dt.datetime.today().weekday() < 5:
+            if datetime.today().weekday() < 5:
                 from services.stock_profile import StockProfile
                 StockProfile().calculate()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  [股票画像] 更新失败: {e}")
 
         print(f"  [完成] 本次采集")
         return bool(new_news)
@@ -114,7 +113,7 @@ class NewsScheduler:
         from config import Config
         benefit_scores = {1: 95, 2: 80, 3: 60}
         with sqlite3.connect(Config.STOCKS_DB) as conn:
-            # 确保列存在
+            # 确保列存在（仅执行一次，不在循环内重复）
             for col in ("benefit_type", "benefit_path"):
                 try:
                     conn.execute(f"ALTER TABLE event_stock_mapping ADD COLUMN {col} TEXT")
@@ -191,7 +190,7 @@ class NewsScheduler:
             try:
                 event = self.event_service.process_news_item(item)
                 analyzed_ids.append(item["id"])
-                event_id = self._get_last_event_id()
+                event_id = event.get("_event_id")
                 if event_id:
                     self.stock_service.process_event_stocks(event_id, event)
                     kg_result = self.knowledge_graph.reason(
@@ -215,10 +214,10 @@ class NewsScheduler:
 
     def _print_ranking(self, stocks: list):
         print(f"\n  ── TOP 推荐榜 ──")
-        print(f"  {'#':3s} {'代码':7s} {'名称':7s} {'总分':5s} {'事件':5s} {'受益':5s} {'市场':5s}")
+        print(f"  {'#':>3s} {'代码':7s} {'名称':7s} {'总分':>5s} {'事件':>5s} {'受益':>5s} {'市场':>5s}")
         for s in stocks:
             print(f"  {s['rank']:3d} {s['stock_code']:7s} {s['stock_name']:6s}  "
-                  f"{s['total_score']:4d}  {s['event_score']:4d}  {s['benefit_score']:4d}  {s['market_score']:4d}")
+                  f"{int(s['total_score']):5d}  {int(s['event_score']):5d}  {int(s['benefit_score']):5d}  {int(s['market_score']):5d}")
         print()
 
     def run(self):

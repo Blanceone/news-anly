@@ -228,8 +228,8 @@ class StockService:
 
             # 2. Embedding 语义匹配 (Phase 9)
             try:
-                from services.embedding_service import EmbeddingService
-                em = EmbeddingService()
+                from services.embedding_service import get_embedding_service
+                em = get_embedding_service()
                 emb_matches = em.match_event(event.get("keywords", []),
                                               event.get("industry", ""),
                                               event.get("sub_industry", ""))

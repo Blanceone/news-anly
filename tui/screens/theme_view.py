@@ -135,8 +135,8 @@ class ThemeViewScreen(Screen):
         name = concept["name"]
         stocks = []
         # 优先AKShare概念成分股（有实时行情）
-        import akshare as ak
         try:
+            import akshare as ak
             df = ak.stock_board_concept_cons_em(symbol=name)
             for _, row in df.iterrows():
                 d = {}

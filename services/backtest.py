@@ -41,14 +41,16 @@ class BacktestEngine:
         from config import Config
         pro = ts.pro_api(Config.TUSHARE_TOKEN)
 
-        # 获取历史评分记录
+        # 获取历史评分记录（使用 stock_score，因 recommendation_result 每次清空）
         with sqlite3.connect(self.stocks_db) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("""
-                SELECT * FROM recommendation_result
-                WHERE strategy_type=? AND created_at BETWEEN ? AND ?
-                ORDER BY created_at, rank_no
-            """, (strategy, start.isoformat(), end.isoformat())).fetchall()
+                SELECT stock_code, stock_name, total_score, score_date,
+                       event_score, benefit_score, market_score
+                FROM stock_score
+                WHERE score_date BETWEEN ? AND ?
+                ORDER BY score_date, total_score DESC
+            """, (start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))).fetchall()
 
         # 按天分组推荐
         daily_recs = defaultdict(list)

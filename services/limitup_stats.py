@@ -1,7 +1,7 @@
 """涨停热度系统 — Phase 4 (V3)
 
 每日统计各主题涨停/连板/炸板数据。
-集成到 ThemeHeat 公式升级: 新闻40% + 资金25% + 板块20% + 涨停15%
+集成到 ThemeHeat 公式: 新闻40% + 板块45% + 涨停15%（资金热度暂无独立数据源）
 """
 import sqlite3
 from collections import defaultdict

@@ -54,8 +54,9 @@ class ThemeHeat:
                 nh = news_heat.get(theme, 0)
                 bh = board_heat.get(theme, 0)
                 lh = limitup_heat.get(theme, 0)
-                # V3 公式: 新闻40% + 资金25% + 板块20% + 涨停15%
-                raw_heat = int(nh * 0.40 + bh * 0.20 + 0 * 0.25 + lh * 0.15)
+                # V3 公式: 新闻40% + 板块20% + 涨停15%
+                # 注: 资金热度(25%)暂无独立数据源，合并入板块热度
+                raw_heat = int(nh * 0.40 + bh * 0.45 + lh * 0.15)
 
                 # 计算 last_active_time
                 prev = existing.get(theme, {})

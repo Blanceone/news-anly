@@ -174,7 +174,7 @@ class DashboardScreen(Screen):
             try:
                 event = evt.process_news_item(item)
                 analyzed_ids.append(item["id"])
-                event_id = self._last_event_id()
+                event_id = event.get("_event_id")
                 if event_id:
                     stk.process_event_stocks(event_id, event)
                     kg_result = kg.reason(event.get("keywords", []), event.get("industry", ""),
@@ -192,7 +192,7 @@ class DashboardScreen(Screen):
             try:
                 event = evt.process_news_item(item)
                 analyzed_ids.append(item["id"])
-                event_id = self._last_event_id()
+                event_id = event.get("_event_id")
                 if event_id:
                     stk.process_event_stocks(event_id, event)
                     kg_result = kg.reason(event.get("keywords", []), event.get("industry", ""),
@@ -208,16 +208,6 @@ class DashboardScreen(Screen):
             ScoringEngine().calculate(hours=72)
             return True
         return False
-
-    def _last_event_id(self):
-        import sqlite3
-        from config import Config
-        try:
-            with sqlite3.connect(Config.NEWS_DB) as conn:
-                row = conn.execute("SELECT MAX(event_id) FROM event_analysis").fetchone()
-                return row[0]
-        except Exception:
-            return None
 
     def _save_kg(self, event_id, stocks):
         if not stocks:

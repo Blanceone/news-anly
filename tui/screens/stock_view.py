@@ -84,9 +84,9 @@ class StockViewScreen(Screen):
                 f"[bold]{score.get('stock_name', '')} ({score.get('stock_code', '')})[/]",
                 "",
                 f"总分: {int(score.get('total_score', 0))} = "
-                f"事件{int(score.get('event_score', 0))}*30% + "
-                f"受益{int(score.get('benefit_score', 0))}*40% + "
-                f"市场{int(score.get('market_score', 0))}*30%",
+                f"事件{int(score.get('event_score', 0))}*15% + "
+                f"受益{int(score.get('benefit_score', 0))}*20% + "
+                f"市场{int(score.get('market_score', 0))}*15% + 热度/簇/龙头/周期",
                 f"触发事件数: {score.get('event_count', 0)}",
             ])
         else:

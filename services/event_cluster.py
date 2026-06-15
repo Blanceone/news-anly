@@ -18,15 +18,15 @@ def _tokenize(text):
 
 
 class EventClustering:
-    _vectorizer = TfidfVectorizer(analyzer='word', max_features=2000,
-                                   sublinear_tf=True, token_pattern=r'(?u)\b\w+\b')
-
     def __init__(self, news_db=None, stocks_db=None):
         from config import Config
         self.news_db = news_db or Config.NEWS_DB
         self.stocks_db = stocks_db or Config.STOCKS_DB
         from core.db_init import init_stocks_db
         init_stocks_db()
+        # 实例级 vectorizer，避免类级别共享导致状态污染
+        self._vectorizer = TfidfVectorizer(analyzer='word', max_features=2000,
+                                            sublinear_tf=True, token_pattern=r'(?u)\b\w+\b')
         # lazy load jieba dict
         jieba.initialize()
 

@@ -39,7 +39,7 @@ class ProfileScreen(Screen):
                 f"{r.get('turnover_rate', 0):.2f}%",
                 str(r.get("market_cap", 0)),
                 str(int(r.get("theme_count", 0))),
-                str(int(r.get("limitup_count", 0))),
+                str(int(r.get("limitup_history", 0))),
             )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected):
@@ -50,8 +50,8 @@ class ProfileScreen(Screen):
                 lines = [
                     f"[bold]{r.get('stock_name','')} ({r.get('stock_code','')})[/]",
                     f"龙头评分: {r.get('leader_score', 0)}",
-                    f"流动性评分: {r.get('liquidity_score', 0)}  活跃度: {r.get('activity_score', 0)}",
-                    f"题材数: {r.get('theme_count', 0)}  涨停数: {r.get('limitup_count', 0)}",
+                    f"行业: {r.get('industry', '')}  波动率: {r.get('volatility', 0):.2f}%",
+                    f"题材数: {r.get('theme_count', 0)}  涨停历史: {r.get('limitup_history', 0)}",
                     f"换手率: {r.get('turnover_rate', 0):.2f}%  市值: {r.get('market_cap', 0)}亿",
                 ]
                 self.query_one("#profile-detail", Static).update("\n".join(lines))

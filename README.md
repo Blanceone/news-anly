@@ -32,15 +32,21 @@
 │   ├── analyzer.py         # LLM分析 + keyword fallback
 │   └── feishu_pusher.py    # 飞书交互式卡片推送
 ├── tui/                    # Textual TUI终端
-│   ├── app.py              # 主应用 (顶部导航1-6 + 时钟)
+│   ├── app.py              # 主应用 (顶部导航1-10 + 时钟)
 │   ├── db.py               # DB查询层 (跨库合并)
-│   └── screens/            # 6个屏幕
+│   └── screens/            # 10个屏幕
 │       ├── dashboard.py    # 看板: 统计栏 + 新闻流 + 推荐榜 + 题材
 │       ├── theme_view.py   # 三栏: 行业板块 / 概念主题 / 成分股
 │       ├── stock_view.py   # 股票: 评分排行 → 事件/主题详情
 │       ├── event_view.py   # 事件: 列表 → 影响股票 + 来源新闻
 │       ├── discovery_view.py # 发现: 新概念候选
-│       └── cluster_view.py # 簇: 事件聚类视图
+│       ├── cluster_view.py # 簇: 事件聚类视图
+│       ├── theme_heat_view.py # 主题热度排行
+│       ├── lifecycle_view.py  # 事件生命周期
+│       ├── profile_view.py    # 股票画像+龙头评分
+│       └── backtest_view.py   # 回测结果
+├── tests/                  # 业务测试
+│   └── test_business.py    # 14项业务逻辑测试
 ├── prd/                    # 产品需求文档 (7份)
 └── ── news.db + stocks.db  # 双数据库分离
 ```
@@ -50,9 +56,6 @@
 ```bash
 # 1. 安装依赖
 pip install -r requirements.txt
-pip install textual        # TUI终端
-pip install akshare        # 板块行情补充
-pip install tushare        # 行业分类 + 日线行情
 
 # 2. 配置环境变量
 cp .env.example .env
@@ -76,6 +79,12 @@ python main.py tui              # TUI终端
 | `2` | 主题 — 主题列表 → 关联股票 |
 | `3` | 股票 — 评分排行 → 事件/主题详情 |
 | `4` | 事件 — 事件列表 → 影响股票 |
+| `5` | 发现 — 新概念候选 |
+| `6` | 簇 — 事件聚类视图 |
+| `7` | 热度 — 主题热度排行（衰减） |
+| `8` | 周期 — 事件生命周期 |
+| `9` | 画像 — 股票画像 + 龙头评分 |
+| `10` | 回测 — 回测结果 + 交易明细 |
 | `r` | 手动刷新当前页面 |
 | `q` | 退出 |
 
