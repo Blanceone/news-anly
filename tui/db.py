@@ -291,8 +291,11 @@ class TuiDB:
     ]
 
     def sector_stocks(self, sector_name):
-        """行业成分股 — Tushare主力 + KG映射 + AKShare补充"""
-        stocks = self._ts_sector_stocks(sector_name)
+        """行业成分股 — V4 concept_board优先 + Tushare + KG + AKShare"""
+        # V4: 优先从 concept_board 查找
+        stocks = self._v4_concept_stocks(sector_name)
+        if not stocks:
+            stocks = self._ts_sector_stocks(sector_name)
         if not stocks:
             stocks = self._kg_sector_stocks(sector_name)
         if not stocks:
@@ -300,6 +303,40 @@ class TuiDB:
         if not stocks:
             stocks = self._ak_concept_stocks(sector_name)
         return stocks
+
+    def _v4_concept_stocks(self, sector_name):
+        """V4: 从concept_stock_score/concept_stock_member获取概念成分股"""
+        try:
+            with self._sconn() as conn:
+                conn.row_factory = sqlite3.Row
+                # 先找 concept_id
+                cb = conn.execute("""
+                    SELECT concept_id FROM concept_board
+                    WHERE concept_name=? AND status='active' LIMIT 1
+                """, (sector_name,)).fetchone()
+                if not cb:
+                    return []
+                cid = cb["concept_id"]
+                # 优先 concept_stock_score
+                rows = conn.execute("""
+                    SELECT stock_code, stock_name, total_score, rank_in_concept
+                    FROM concept_stock_score WHERE concept_id=?
+                    ORDER BY rank_in_concept ASC LIMIT 30
+                """, (cid,)).fetchall()
+                if rows:
+                    return [{"stock_code": r["stock_code"], "stock_name": r["stock_name"],
+                             "change": 0, "score": r["total_score"],
+                             "rank": r["rank_in_concept"]} for r in rows]
+                # fallback: concept_stock_member
+                rows = conn.execute("""
+                    SELECT stock_code, stock_name, is_core
+                    FROM concept_stock_member WHERE concept_id=?
+                    ORDER BY is_core DESC, rowid ASC LIMIT 30
+                """, (cid,)).fetchall()
+                return [{"stock_code": r["stock_code"], "stock_name": r["stock_name"],
+                         "change": 0, "is_core": r["is_core"]} for r in rows]
+        except Exception:
+            return []
 
     def _kg_sector_stocks(self, sector_name):
         """从theme_stock_mapping获取主题对应股票"""
@@ -406,68 +443,57 @@ class TuiDB:
         return sectors
 
     def concept_themes(self):
-        """概念主题（KG主题 + AKShare概念板块），含热度/股票数"""
+        """概念主题 — V4: concept_board(申万行业+东方财富概念) 为主"""
         themes = []
         seen = set()
-        # KG 主题 → theme_stock_mapping
+        # 主数据源: concept_board (Tushare申万 + 东方财富概念)
         try:
             with self._sconn() as conn:
                 rows = conn.execute("""
-                    SELECT t.theme_name, t.theme_key, COUNT(DISTINCT t.stock_code) as stock_count
-                    FROM theme_stock_mapping t GROUP BY t.theme_key
+                    SELECT cb.concept_id, cb.concept_name, cb.concept_type,
+                           cb.stock_count, COALESCE(m.cnt, 0) as member_count,
+                           cb.board_change, cb.up_count, cb.down_count, cb.board_volume
+                    FROM concept_board cb
+                    LEFT JOIN (
+                        SELECT concept_id, COUNT(*) as cnt
+                        FROM concept_stock_member GROUP BY concept_id
+                    ) m ON cb.concept_id = m.concept_id
+                    WHERE cb.status='active'
+                    ORDER BY cb.concept_type ASC, cb.stock_count DESC
                 """).fetchall()
                 for r in rows:
-                    themes.append({
-                        "name": r["theme_name"],
-                        "key": r["theme_key"],
-                        "stock_count": r["stock_count"],
-                        "change": 0, "up": 0, "down": 0, "volume": 0,
-                        "source": "kg",
-                    })
-                    seen.add(r["theme_name"])
-        except Exception:
-            pass
-        # AKShare 概念板块（有实时行情）
-        try:
-            import akshare as ak
-            df = ak.stock_board_concept_spot_em()
-            for _, row in df.iterrows():
-                d = {}
-                for k, v in row.items():
-                    k = k.strip()
-                    if "板块名称" in k or "名称" in k:
-                        d["name"] = str(v)
-                    elif "涨跌幅" in k:
-                        d["change"] = round(float(v), 2) if v else 0.0
-                    elif "上涨" in k:
-                        d["up"] = int(v) if v else 0
-                    elif "下跌" in k:
-                        d["down"] = int(v) if v else 0
-                    elif "成交额" in k:
-                        d["volume"] = round(float(v) / 1e8, 1) if v else 0.0
-                if d.get("name") and d["name"] not in seen:
-                    d["source"] = "concept"
-                    d["stock_count"] = 0
+                    d = dict(r)
+                    d["name"] = d["concept_name"]
+                    d["key"] = d["concept_id"]
+                    d["stock_count"] = max(d["stock_count"], d["member_count"])
+                    d["change"] = d.get("board_change", 0)
+                    d["up"] = d.get("up_count", 0)
+                    d["down"] = d.get("down_count", 0)
+                    d["volume"] = d.get("board_volume", 0)
+                    d["source"] = d["concept_type"]
                     themes.append(d)
-                    seen.add(d["name"])
+                    seen.add(d["concept_name"])
         except Exception:
             pass
-        # 静态兜底：确保未在theme_stock_mapping中的主题仍然可见
-        static_names = [
-            "人工智能", "算力基础设施", "半导体", "机器人", "创新药",
-            "先进封装", "具身智能", "低空经济", "新能源", "CPO/光通信",
-            "AI芯片", "光模块", "封测", "减速器", "CXO",
-            "光伏", "锂电池", "储能", "人形机器人", "智能驾驶",
-            "玻璃基板",
-        ]
-        for name in static_names:
-            if name not in seen:
-                themes.append({
-                    "name": name, "key": name, "stock_count": 0,
-                    "change": 0, "up": 0, "down": 0, "volume": 0,
-                    "source": "static",
-                })
-                seen.add(name)
+        # fallback: KG 主题
+        if not themes:
+            try:
+                with self._sconn() as conn:
+                    rows = conn.execute("""
+                        SELECT t.theme_name, t.theme_key, COUNT(DISTINCT t.stock_code) as stock_count
+                        FROM theme_stock_mapping t GROUP BY t.theme_key
+                    """).fetchall()
+                    for r in rows:
+                        themes.append({
+                            "name": r["theme_name"],
+                            "key": r["theme_key"],
+                            "stock_count": r["stock_count"],
+                            "change": 0, "up": 0, "down": 0, "volume": 0,
+                            "source": "kg",
+                        })
+                        seen.add(r["theme_name"])
+            except Exception:
+                pass
         themes.sort(key=lambda t: -t.get("change", 0))
         return themes
 
@@ -509,6 +535,21 @@ class TuiDB:
                 SELECT theme_name, benefit_level, benefit_reason
                 FROM theme_stock_mapping WHERE stock_code = ?
             """, (stock_code,)).fetchall()
+        # V4: 基本面 + 概念归属
+        fund = self.stock_fundamentals(stock_code)
+        concepts = self.stock_concepts(stock_code)
+        # 推荐策略
+        recs = []
+        try:
+            with self._sconn() as sconn:
+                recs = sconn.execute("""
+                    SELECT strategy_type, rank_no, score, recommendation_reason
+                    FROM recommendation_result WHERE stock_code=?
+                    ORDER BY created_at DESC
+                """, (stock_code,)).fetchall()
+                recs = [dict(r) for r in recs]
+        except Exception:
+            pass
         # Cross-DB merge: get event details from news.db
         event_ids = tuple(r["event_id"] for r in mapping_rows) if mapping_rows else (-1,)
         events = []
@@ -548,6 +589,9 @@ class TuiDB:
             "events": events,
             "themes": [dict(r) for r in themes],
             "market_confirmations": market,
+            "fundamentals": fund,
+            "concepts": concepts,
+            "recommendations": recs,
         }
 
     def all_stocks_summary(self):
@@ -555,12 +599,17 @@ class TuiDB:
             rows = conn.execute("""
                 SELECT s.stock_code, s.stock_name, MAX(s.total_score) as total_score,
                        MAX(s.event_count) as event_count,
-                       COALESCE(t.theme_count, 0) as theme_count
+                       COALESCE(t.theme_count, 0) as theme_count,
+                       COALESCE(c.concept_count, 0) as concept_count
                 FROM stock_score s
                 LEFT JOIN (
                     SELECT stock_code, COUNT(*) as theme_count
                     FROM theme_stock_mapping GROUP BY stock_code
                 ) t ON s.stock_code = t.stock_code
+                LEFT JOIN (
+                    SELECT stock_code, COUNT(*) as concept_count
+                    FROM concept_stock_member GROUP BY stock_code
+                ) c ON s.stock_code = c.stock_code
                 WHERE s.score_date = date('now')
                 GROUP BY s.stock_code
                 ORDER BY total_score DESC
@@ -569,12 +618,17 @@ class TuiDB:
                 rows = conn.execute("""
                     SELECT s.stock_code, s.stock_name, MAX(s.total_score) as total_score,
                            MAX(s.event_count) as event_count,
-                           COALESCE(t.theme_count, 0) as theme_count
+                           COALESCE(t.theme_count, 0) as theme_count,
+                           COALESCE(c.concept_count, 0) as concept_count
                     FROM stock_score s
                     LEFT JOIN (
                         SELECT stock_code, COUNT(*) as theme_count
                         FROM theme_stock_mapping GROUP BY stock_code
                     ) t ON s.stock_code = t.stock_code
+                    LEFT JOIN (
+                        SELECT stock_code, COUNT(*) as concept_count
+                        FROM concept_stock_member GROUP BY stock_code
+                    ) c ON s.stock_code = c.stock_code
                     GROUP BY s.stock_code
                     ORDER BY total_score DESC LIMIT 50
                 """).fetchall()
@@ -633,9 +687,12 @@ class TuiDB:
                 event_count = conn.execute("SELECT COUNT(*) FROM event_analysis").fetchone()[0]
             with self._sconn() as conn:
                 stock_count = conn.execute("SELECT COUNT(DISTINCT stock_code) FROM stock_score").fetchone()[0]
-            return {"news": news_count, "events": event_count, "stocks": stock_count}
+                concept_count = conn.execute("SELECT COUNT(*) FROM concept_board WHERE status='active'").fetchone()[0]
+                fund_count = conn.execute("SELECT COUNT(*) FROM stock_fundamentals WHERE pe_ttm > 0").fetchone()[0]
+            return {"news": news_count, "events": event_count, "stocks": stock_count,
+                    "concepts": concept_count, "fundamentals": fund_count}
         except Exception:
-            return {"news": 0, "events": 0, "stocks": 0}
+            return {"news": 0, "events": 0, "stocks": 0, "concepts": 0, "fundamentals": 0}
 
     def theme_candidates(self, limit=50):
         try:
@@ -760,3 +817,135 @@ class TuiDB:
                 return [dict(r) for r in rows]
         except Exception:
             return []
+
+    # ---- V4 概念树 + 基本面 ----
+
+    def concept_board_list(self, limit=200):
+        """概念树列表（申万行业L1/L2 + 东方财富概念）"""
+        try:
+            with self._sconn() as conn:
+                rows = conn.execute("""
+                    SELECT cb.concept_id, cb.concept_name, cb.concept_type,
+                           cb.stock_count, cb.board_change, cb.board_volume,
+                           cb.up_count, cb.down_count, cb.keywords,
+                           COALESCE(m.cnt, 0) as member_count
+                    FROM concept_board cb
+                    LEFT JOIN (
+                        SELECT concept_id, COUNT(*) as cnt
+                        FROM concept_stock_member GROUP BY concept_id
+                    ) m ON cb.concept_id = m.concept_id
+                    WHERE cb.status='active'
+                    ORDER BY cb.concept_type ASC, cb.stock_count DESC
+                    LIMIT ?
+                """, (limit,)).fetchall()
+                return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    def concept_board_stocks(self, concept_id):
+        """概念成分股（优先concept_stock_score，fallback concept_stock_member）"""
+        try:
+            with self._sconn() as conn:
+                # 优先: concept_stock_score（LLM分析+排名）
+                rows = conn.execute("""
+                    SELECT stock_code, stock_name, total_score, rank_in_concept,
+                           relevance_score, valuation_score, quality_score,
+                           capability_score, chain_score
+                    FROM concept_stock_score
+                    WHERE concept_id=?
+                    ORDER BY rank_in_concept ASC LIMIT 30
+                """, (concept_id,)).fetchall()
+                if rows:
+                    return [{"source": "score", **dict(r)} for r in rows]
+                # fallback: concept_stock_member（仅成员列表）
+                rows = conn.execute("""
+                    SELECT stock_code, stock_name, is_core
+                    FROM concept_stock_member
+                    WHERE concept_id=?
+                    ORDER BY is_core DESC, rowid ASC LIMIT 30
+                """, (concept_id,)).fetchall()
+                return [{"source": "member", "total_score": 0,
+                         "rank_in_concept": 0, **dict(r)} for r in rows]
+        except Exception:
+            return []
+
+    def _normalize_code(self, stock_code):
+        """统一股票代码为6位格式（去掉.SZ/.SH后缀）"""
+        if not stock_code:
+            return stock_code
+        code = stock_code.split(".")[0] if "." in stock_code else stock_code
+        return code
+
+    def stock_fundamentals(self, stock_code):
+        """股票基本面数据"""
+        try:
+            code = self._normalize_code(stock_code)
+            with self._sconn() as conn:
+                row = conn.execute("""
+                    SELECT * FROM stock_fundamentals WHERE stock_code=?
+                """, (code,)).fetchone()
+                return dict(row) if row else None
+        except Exception:
+            return None
+
+    def stock_concepts(self, stock_code):
+        """股票所属概念列表"""
+        try:
+            code = self._normalize_code(stock_code)
+            with self._sconn() as conn:
+                rows = conn.execute("""
+                    SELECT cm.concept_id, cm.concept_name, cm.is_core,
+                           cb.concept_type
+                    FROM concept_stock_member cm
+                    LEFT JOIN concept_board cb ON cm.concept_id = cb.concept_id
+                    WHERE cm.stock_code=?
+                    ORDER BY cb.concept_type ASC
+                """, (code,)).fetchall()
+                return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    def recommendations(self, strategy="HOT", limit=20):
+        """推荐结果（按策略类型）"""
+        try:
+            with self._sconn() as conn:
+                rows = conn.execute("""
+                    SELECT * FROM recommendation_result
+                    WHERE strategy_type=?
+                    ORDER BY created_at DESC, rank_no ASC
+                    LIMIT ?
+                """, (strategy, limit)).fetchall()
+                return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    def top_stocks_v4(self, limit=20):
+        """V4推荐榜（含concept_rank和fundamental_score）"""
+        try:
+            with self._sconn() as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute("""
+                    SELECT stock_code, stock_name, total_score,
+                           event_score, benefit_score, market_score,
+                           event_count,
+                           COALESCE(concept_rank, 0) as concept_rank,
+                           COALESCE(fundamental_score, 0) as fundamental_score
+                    FROM stock_score
+                    WHERE score_date = date('now')
+                    GROUP BY stock_code
+                    ORDER BY total_score DESC LIMIT ?
+                """, (limit,)).fetchall()
+                if not rows:
+                    rows = conn.execute("""
+                        SELECT stock_code, stock_name, total_score,
+                               event_score, benefit_score, market_score,
+                               event_count,
+                               COALESCE(concept_rank, 0) as concept_rank,
+                               COALESCE(fundamental_score, 0) as fundamental_score
+                        FROM stock_score
+                        GROUP BY stock_code
+                        ORDER BY MAX(id) DESC, total_score DESC LIMIT ?
+                    """, (limit,)).fetchall()
+                return [dict(r) for r in rows]
+        except Exception:
+            return self.top_stocks(limit)

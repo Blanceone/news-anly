@@ -60,6 +60,8 @@ class DashboardScreen(Screen):
             yield Static("", id="stat-news", classes="stat-item")
             yield Static("", id="stat-events", classes="stat-item")
             yield Static("", id="stat-stocks", classes="stat-item")
+            yield Static("", id="stat-concepts", classes="stat-item")
+            yield Static("", id="stat-fundamentals", classes="stat-item")
         with Horizontal():
             with Vertical(classes="news-panel"):
                 yield Static("news 实时新闻", classes="panel-title")
@@ -84,6 +86,8 @@ class DashboardScreen(Screen):
         self.query_one("#stat-news").update(f"news: {s['news']}")
         self.query_one("#stat-events").update(f"event: {s['events']}")
         self.query_one("#stat-stocks").update(f"stock: {s['stocks']}")
+        self.query_one("#stat-concepts").update(f"concept: {s['concepts']}")
+        self.query_one("#stat-fundamentals").update(f"fund: {s['fundamentals']}")
 
     def on_mount(self):
         self.db = TuiDB()
@@ -143,8 +147,9 @@ class DashboardScreen(Screen):
         self._repair_stock_mappings()
 
     def _init_tables(self):
-        self.query_one("#top-stocks-table", DataTable).add_columns("#", "code", "name", "score", "evt", "bnf", "mkt")
-        self.query_one("#themes-table", DataTable).add_columns("theme", "stocks")
+        self.query_one("#top-stocks-table", DataTable).add_columns(
+            "#", "code", "name", "score", "evt", "bnf", "mkt", "cpt", "fund")
+        self.query_one("#themes-table", DataTable).add_columns("theme", "stocks", "type")
 
     async def _background_fetch(self):
         from collectors import NewsCollector
@@ -239,7 +244,7 @@ class DashboardScreen(Screen):
     def _update_top_stocks(self):
         table = self.query_one("#top-stocks-table", DataTable)
         table.clear()
-        rows = self.db.top_stocks(15)
+        rows = self.db.top_stocks_v4(15)
         for i, r in enumerate(rows, 1):
             table.add_row(
                 str(i),
@@ -249,9 +254,11 @@ class DashboardScreen(Screen):
                 str(int(r.get("event_score", 0))),
                 str(int(r.get("benefit_score", 0))),
                 str(int(r.get("market_score", 0))),
+                str(int(r.get("concept_rank", 0))),
+                str(int(r.get("fundamental_score", 0))),
             )
         if not rows:
-            table.add_row("--", "no data", "", "", "", "", "")
+            table.add_row("--", "no data", "", "", "", "", "", "", "")
 
     def _update_news(self):
         items = self.db.recent_news(hours=72, limit=30)
@@ -268,8 +275,29 @@ class DashboardScreen(Screen):
     def _update_themes(self):
         table = self.query_one("#themes-table", DataTable)
         table.clear()
-        themes = self.db.hot_themes()
-        for t in themes:
-            table.add_row(t.get("theme_name", ""), str(t.get("stock_count", 0)))
-        if not themes:
-            table.add_row("no data", "0")
+        # V4: 从概念树获取热门题材
+        concepts = self.db.concept_board_list(limit=15)
+        if concepts:
+            for c in concepts:
+                cid = c.get("concept_id", "")
+                ctype = c.get("concept_type", "")
+                if cid.startswith("SW1_"):
+                    type_label = "L1"
+                elif cid.startswith("SW2_"):
+                    type_label = "L2"
+                elif cid.startswith("EM_"):
+                    type_label = "题材"
+                else:
+                    type_label = {"industry": "行业", "concept": "题材"}.get(ctype, ctype)
+                table.add_row(
+                    c.get("concept_name", ""),
+                    str(max(c.get("stock_count", 0), c.get("member_count", 0))),
+                    type_label,
+                )
+        else:
+            # fallback: 旧主题
+            themes = self.db.hot_themes()
+            for t in themes:
+                table.add_row(t.get("theme_name", ""), str(t.get("stock_count", 0)), "old")
+            if not themes:
+                table.add_row("no data", "0", "")

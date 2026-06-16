@@ -48,7 +48,8 @@ class StockViewScreen(Screen):
 
     def on_mount(self):
         self.db = TuiDB()
-        self.query_one("#stock-list", DataTable).add_columns("排名", "代码", "名称", "总分", "事件", "关联主题")
+        self.query_one("#stock-list", DataTable).add_columns(
+            "排名", "代码", "名称", "总分", "事件", "主题", "概念")
         self._refresh()
         self.set_interval(30, self._refresh)
 
@@ -64,6 +65,7 @@ class StockViewScreen(Screen):
                 str(int(s.get("total_score", 0))),
                 str(s.get("event_count", 0)),
                 str(s.get("theme_count", 0)),
+                str(s.get("concept_count", 0)),
             )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected):
@@ -83,15 +85,50 @@ class StockViewScreen(Screen):
             lines.extend([
                 f"[bold]{score.get('stock_name', '')} ({score.get('stock_code', '')})[/]",
                 "",
-                f"总分: {int(score.get('total_score', 0))} = "
-                f"事件{int(score.get('event_score', 0))}*15% + "
-                f"受益{int(score.get('benefit_score', 0))}*20% + "
-                f"市场{int(score.get('market_score', 0))}*15% + 热度/簇/龙头/周期",
-                f"触发事件数: {score.get('event_count', 0)}",
+                f"[bold]V4综合评分: {int(score.get('total_score', 0))}[/]",
+                f"  事件{int(score.get('event_score', 0))}x12% + "
+                f"受益{int(score.get('benefit_score', 0))}x18% + "
+                f"概念排名x10% + 市场{int(score.get('market_score', 0))}x12%",
+                f"  热度x13% + 簇x8% + 龙头x12% + 周期x8% + 基本面x7%",
+                f"  触发事件数: {score.get('event_count', 0)}",
             ])
         else:
             lines.append("无评分数据")
 
+        # V4: 基本面数据
+        fund = detail.get("fundamentals")
+        if fund:
+            lines.extend(["", "[bold]基本面:[/]"])
+            pe = fund.get("pe_ttm", 0)
+            pb = fund.get("pb", 0)
+            mv = fund.get("total_mv", 0)
+            roe = fund.get("roe", 0)
+            gm = fund.get("gross_margin", 0)
+            lines.append(f"  PE(TTM): {pe:.1f}  PB: {pb:.2f}  市值: {mv:.0f}亿")
+            lines.append(f"  ROE: {roe:.1f}%  毛利率: {gm:.1f}%")
+            biz = (fund.get("company_business") or "")[:60]
+            if biz:
+                lines.append(f"  主营: {biz}")
+
+        # V4: 概念归属
+        concepts = detail.get("concepts", [])
+        if concepts:
+            lines.extend(["", "[bold]概念归属:[/]"])
+            for c in concepts[:10]:
+                cid = c.get("concept_id", "")
+                ctype = c.get("concept_type", "")
+                if cid.startswith("SW1_"):
+                    type_label = "L1"
+                elif cid.startswith("SW2_"):
+                    type_label = "L2"
+                elif cid.startswith("EM_"):
+                    type_label = "题材"
+                else:
+                    type_label = {"industry": "行业", "concept": "题材"}.get(ctype, ctype)
+                core = "*" if c.get("is_core") else ""
+                lines.append(f"  [{type_label}] {c.get('concept_name', '')}{core}")
+
+        # 旧: 受益逻辑(主题映射)
         themes = detail.get("themes", [])
         if themes:
             level_map = {1: "一级", 2: "二级", 3: "三级"}
@@ -99,6 +136,20 @@ class StockViewScreen(Screen):
             for t in themes:
                 lv = level_map.get(t.get("benefit_level"), "")
                 lines.append(f"  {t.get('theme_name', '')} [{lv}] {t.get('benefit_reason', '')}")
+
+        # V4: 推荐策略
+        recs = detail.get("recommendations", [])
+        if recs:
+            lines.extend(["", "[bold]推荐策略:[/]"])
+            seen_types = set()
+            for r in recs:
+                stype = r.get("strategy_type", "")
+                if stype in seen_types:
+                    continue
+                seen_types.add(stype)
+                reason = (r.get("recommendation_reason") or "")[:50]
+                lines.append(f"  [{stype}] #{r.get('rank_no', '')} "
+                             f"分:{int(r.get('score', 0))} {reason}")
 
         mkt = detail.get("market_confirmations", [])
         if mkt:
@@ -116,11 +167,11 @@ class StockViewScreen(Screen):
                 ts = to_bjt(e.get("created_at"))
                 score_ev = e.get("event_score", 0) or 0
                 bscore = e.get("benefit_score", 0) or 0
-                reason = (e.get("match_reason") or "")[:30]
                 lines.append(
                     f"  {ts} [{e.get('event_type', '')}] "
                     f"事件{score_ev}分 受益{bscore}分"
                 )
+                reason = (e.get("match_reason") or "")[:30]
                 if reason:
                     lines.append(f"    -> {reason}")
                 summary = (e.get("ai_summary") or "")[:50]
