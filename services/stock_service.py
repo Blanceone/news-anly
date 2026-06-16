@@ -126,7 +126,7 @@ class StockService:
                 match_score = mc["match_score"]
                 method = mc["match_method"]
 
-                # 从 concept_stock_score 取TOP20
+                # 优先从 concept_stock_score 取TOP20（LLM分析后的排名）
                 rows = conn.execute("""
                     SELECT stock_code, stock_name, total_score, rank_in_concept
                     FROM concept_stock_score
@@ -135,13 +135,23 @@ class StockService:
                     LIMIT 20
                 """, (cid,)).fetchall()
 
+                # fallback: concept_stock_member（仅成员列表，无排名）
+                if not rows:
+                    rows = conn.execute("""
+                        SELECT stock_code, stock_name, 50 as total_score, 0 as rank_in_concept
+                        FROM concept_stock_member
+                        WHERE concept_id=?
+                        ORDER BY rowid ASC
+                        LIMIT 20
+                    """, (cid,)).fetchall()
+
                 for r in rows:
                     code = r["stock_code"]
                     if code in seen:
                         continue
                     seen.add(code)
 
-                    concept_score = float(r["total_score"] or 0)
+                    concept_score = float(r["total_score"] or 50)
                     benefit_score = int(concept_score * match_score)
 
                     # benefit_type 由匹配方式决定
@@ -184,15 +194,17 @@ class StockService:
                 theme = (r["theme_name"] or "").lower()
                 if any(kw in all_text for kw in (theme, reason)):
                     matched.add((r["stock_code"], r["stock_name"],
-                                 r["benefit_level"], r["benefit_reason"]))
+                                 r["benefit_level"],
+                                 r["benefit_reason"] or r["theme_name"]))
 
         return [{
             "stock_code": c, "stock_name": n,
             "benefit_level": l, "benefit_score": {1: 95, 2: 80, 3: 60}.get(l, 40),
             "benefit_type": "DIRECT" if l == 1 else "INDIRECT",
             "benefit_path": "fallback(旧主题库)",
+            "benefit_reason": r,
             "_match_by": "fallback",
-        } for c, n, l, _ in matched]
+        } for c, n, l, r in matched]
 
     # ─── 事件股票处理 ──────────────────────────────────
 

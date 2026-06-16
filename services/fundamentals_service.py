@@ -118,7 +118,59 @@ class FundamentalsService:
                 count += 1
             conn.commit()
         print(f"  [基本面] 写入 {count} 只股票基本面数据")
+
+        # 5. 批量获取ROE等财务指标（市值TOP500）
+        self._refresh_roe_batch(pro, top_n=500)
+
         return count
+
+    # ─── 批量ROE获取 ────────────────────────────────────
+
+    def _refresh_roe_batch(self, pro, top_n: int = 500) -> int:
+        """批量获取市值TOP N股票的ROE/毛利率/营收同比
+        
+        使用 fina_indicator 逐只获取，每只间隔0.15s防限流。
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute("""
+                SELECT stock_code FROM stock_fundamentals
+                WHERE roe IS NULL OR roe = 0
+                ORDER BY total_mv DESC
+                LIMIT ?
+            """, (top_n,)).fetchall()
+        
+        if not rows:
+            print("  [基本面] ROE数据已是最新")
+            return 0
+        
+        codes = [r[0] for r in rows]
+        print(f"  [基本面] 批量获取 {len(codes)} 只股票的ROE/毛利率...")
+        updated = 0
+        for i, code in enumerate(codes):
+            try:
+                ts_code = self._to_ts_code(code)
+                fina = pro.fina_indicator(ts_code=ts_code,
+                                          fields='ts_code,roe_dt,grossprofit_margin,revenue_yoy')
+                if not fina.empty:
+                    row = fina.iloc[0]
+                    roe = float(row.get("roe_dt", 0) or row.get("roe", 0) or 0)
+                    margin = float(row.get("grossprofit_margin", 0) or 0)
+                    rev_yoy = float(row.get("revenue_yoy", 0) or 0)
+                    with sqlite3.connect(self.db_path) as conn:
+                        conn.execute("""
+                            UPDATE stock_fundamentals
+                            SET roe=?, gross_margin=?, revenue_yoy=?, updated_at=?
+                            WHERE stock_code=?
+                        """, (roe, margin, rev_yoy, datetime.now().isoformat(), code))
+                        updated += 1
+            except Exception:
+                pass
+            time.sleep(0.15)
+            if (i + 1) % 100 == 0:
+                print(f"  [基本面] ROE进度: {i+1}/{len(codes)}, 已更新{updated}")
+        
+        print(f"  [基本面] 更新 {updated} 只股票的ROE/毛利率")
+        return updated
 
     # ─── 公司业务描述 ─────────────────────────────────
 

@@ -68,16 +68,23 @@ class EmbeddingService:
         return result
 
     def seed_embeddings(self):
-        """TF-IDF fit + 持久化向量到 theme_embedding 表"""
+        """TF-IDF fit + 持久化向量到 theme_embedding 表 + 保存 vectorizer"""
         themes = self._build_theme_texts()
         texts = [t["text"] for t in themes]
         vecs = self._vectorizer.fit_transform(texts).toarray()
         with sqlite3.connect(self.db_path) as conn:
+            # 清空旧向量（避免残留不同维度的向量）
+            conn.execute("DELETE FROM theme_embedding")
             for t, vec in zip(themes, vecs):
                 conn.execute("""
                     INSERT OR REPLACE INTO theme_embedding (theme_name, description, embedding)
                     VALUES (?, ?, ?)
                 """, (t["name"], t["text"], pickle.dumps(vec)))
+            # 持久化 vectorizer 以保证 match() 使用相同词汇表
+            conn.execute("""
+                INSERT OR REPLACE INTO theme_embedding (theme_name, description, embedding)
+                VALUES (?, ?, ?)
+            """, ("__vectorizer__", "", pickle.dumps(self._vectorizer)))
             conn.commit()
         self._is_seeded = True
         print(f"  [Embedding] 已生成 {len(themes)} 个主题的 TF-IDF 向量")
@@ -87,9 +94,13 @@ class EmbeddingService:
         rows = self._load_embeddings()
         if not rows:
             return []
+        # 优先加载持久化的 vectorizer，保证维度一致
         if not self._is_seeded:
-            self._vectorizer.fit([r[1] for r in rows])
-            self._is_seeded = True
+            self._try_load_vectorizer()
+            if not self._is_seeded:
+                # fallback: 用存储的描述重建
+                self._vectorizer.fit([r[1] for r in rows])
+                self._is_seeded = True
         text_vec = self._vectorizer.transform([text]).toarray()[0]
         norm_t = np.linalg.norm(text_vec)
         if norm_t == 0:
@@ -97,6 +108,8 @@ class EmbeddingService:
         text_vec = text_vec / norm_t
         results = []
         for theme_name, desc, blob in rows:
+            if theme_name == "__vectorizer__":
+                continue
             theme_vec = pickle.loads(blob)
             norm_s = np.linalg.norm(theme_vec)
             if norm_s == 0:
@@ -107,6 +120,20 @@ class EmbeddingService:
                 results.append({"theme_name": theme_name, "similarity": round(sim, 4)})
         results.sort(key=lambda x: -x["similarity"])
         return results[:top_k]
+
+    def _try_load_vectorizer(self):
+        """尝试从 DB 加载持久化的 vectorizer"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                row = conn.execute(
+                    "SELECT embedding FROM theme_embedding WHERE theme_name='__vectorizer__'"
+                ).fetchone()
+                if row:
+                    self._vectorizer = pickle.loads(row[0])
+                    self._is_seeded = True
+                    return
+        except Exception:
+            pass
 
     def _load_embeddings(self):
         try:

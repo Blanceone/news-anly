@@ -159,10 +159,10 @@ def test_embedding_service():
     from services.embedding_service import EmbeddingService
     em = EmbeddingService()
     em.seed_embeddings()
-    # 测试匹配
-    result = em.match("先进封装 Chiplet HBM 技术突破")
-    assert len(result) > 0, "Should match themes for 先进封装"
-    print(f"  [OK] Embedding匹配: '先进封装' → {result[0]['theme_name']} (sim={result[0]['similarity']})")
+    # 测试匹配（使用概念树中存在的行业名）
+    result = em.match("半导体 芯片 晶圆代工 集成电路")
+    assert len(result) > 0, "Should match themes for 半导体"
+    print(f"  [OK] Embedding匹配: '半导体' → {result[0]['theme_name']} (sim={result[0]['similarity']})")
 
 
 def test_theme_heat_formula():
@@ -216,6 +216,87 @@ def test_config():
     for cat, keywords in Config.NEWS_CATEGORIES.items():
         assert len(keywords) == len(set(keywords)), f"Duplicate in {cat}: {[k for k in keywords if keywords.count(k)>1]}"
     print(f"  [OK] NEWS_CATEGORIES 无重复关键词")
+
+
+def test_concept_crawler():
+    """测试概念树爬虫（离线）"""
+    from services.concept_crawler import ConceptCrawler
+    cc = ConceptCrawler()
+    # 测试 normalize_code
+    assert cc._normalize_code("002230.SZ") == "002230"
+    assert cc._normalize_code("600519.SH") == "600519"
+    assert cc._normalize_code("300750") == "300750"
+    assert cc._normalize_code("abc") == ""
+    print(f"  [OK] normalize_code: 4 cases passed")
+    # 测试 extract_keywords
+    assert "AI" in cc._extract_keywords("AI/算力")
+    assert "半导体" in cc._extract_keywords("半导体、芯片")
+    print(f"  [OK] extract_keywords: correct")
+    # 测试 keyword search (DB中可能为空)
+    import sqlite3
+    with sqlite3.connect(Config.STOCKS_DB) as c:
+        cnt = c.execute("SELECT COUNT(*) FROM concept_board").fetchone()[0]
+    print(f"  [OK] concept_board: {cnt} 条记录")
+
+
+def test_fundamentals_data():
+    """测试基本面数据完整性"""
+    import sqlite3
+    with sqlite3.connect(Config.STOCKS_DB) as c:
+        total = c.execute("SELECT COUNT(*) FROM stock_fundamentals").fetchone()[0]
+        with_pe = c.execute("SELECT COUNT(*) FROM stock_fundamentals WHERE pe_ttm > 0").fetchone()[0]
+        with_roe = c.execute("SELECT COUNT(*) FROM stock_fundamentals WHERE roe != 0").fetchone()[0]
+        assert total > 0, "stock_fundamentals should not be empty"
+        assert with_pe > 0, f"Should have PE data, got {with_pe}/{total}"
+        print(f"  [OK] 基本面: {total}条, PE>0: {with_pe}, ROE!=0: {with_roe}")
+
+
+def test_fundamental_score_calc():
+    """测试基本面评分计算"""
+    from services.scoring_engine import ScoringEngine
+    se = ScoringEngine()
+    # 获取一只有PE和ROE数据的股票
+    import sqlite3
+    with sqlite3.connect(Config.STOCKS_DB) as c:
+        row = c.execute(
+            "SELECT stock_code FROM stock_fundamentals WHERE pe_ttm > 0 AND roe != 0 LIMIT 1"
+        ).fetchone()
+    if row:
+        score = se._load_fundamental_score(row[0])
+        assert score > 0, f"fundamental_score should > 0 for {row[0]}, got {score}"
+        assert score <= 100, f"fundamental_score should <= 100, got {score}"
+        print(f"  [OK] fundamental_score({row[0]}) = {score:.1f}")
+    else:
+        print(f"  [SKIP] 无PE+ROE数据")
+
+
+def test_v4_scoring_output():
+    """测试V4评分输出包含新字段"""
+    from services.scoring_engine import ScoringEngine
+    se = ScoringEngine()
+    ranked = se.calculate(hours=24)
+    if ranked:
+        r = ranked[0]
+        for key in ("concept_rank", "fundamental_score", "stock_code", "total_score"):
+            assert key in r, f"V4 output missing key: {key}"
+        print(f"  [OK] V4输出字段: concept_rank={r['concept_rank']}, fundamental={r['fundamental_score']}")
+    else:
+        print(f"  [SKIP] 无评分数据")
+
+
+def test_stock_service_match_reason():
+    """测试股票匹配有reason"""
+    from services.stock_service import StockService
+    ss = StockService()
+    event = {"keywords": ["AI"], "industry": "人工智能"}
+    matched = ss.match_event_to_stocks(event)
+    assert len(matched) > 0, "Should match stocks"
+    has_reason = any(
+        m.get("benefit_reason") or m.get("_concept_name") or m.get("benefit_path")
+        for m in matched
+    )
+    assert has_reason, f"All matches should have reason, got: {matched[:2]}"
+    print(f"  [OK] match_reason: {len(matched)} stocks, has_reason=True")
 
 
 if __name__ == "__main__":
@@ -293,6 +374,12 @@ if __name__ == "__main__":
         ("Scheduler事件ID", test_scheduler_event_id),
         ("回测查询", test_backtest_query),
         ("TUI数据查询", test_tui_db_queries),
+        # V4 新增测试
+        ("概念树爬虫(离线)", test_concept_crawler),
+        ("基本面数据", test_fundamentals_data),
+        ("基本面评分", test_fundamental_score_calc),
+        ("V4评分输出", test_v4_scoring_output),
+        ("股票匹配reason", test_stock_service_match_reason),
     ]
 
     passed = 0

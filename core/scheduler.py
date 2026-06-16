@@ -33,6 +33,14 @@ class NewsScheduler:
         print(f"[{now.strftime('%H:%M:%S')}] 开始增量采集...")
         print(f"{'='*50}")
 
+        # V4: 首次运行时确保基本面数据就绪；概念树按7天周期刷新
+        if not self._daily_done:
+            self._refresh_fundamentals()
+            self._daily_done = True
+        if not self._weekly_done:
+            self._refresh_concept_tree()
+            self._weekly_done = True
+
         last_fetch = self.collector.get_last_fetch_time()
         print(f"  上次采集时间: {last_fetch.strftime('%Y-%m-%d %H:%M:%S')}")
 
