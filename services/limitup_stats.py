@@ -24,9 +24,15 @@ class LimitupStats:
                     limitup_count INTEGER DEFAULT 0,
                     consecutive_count INTEGER DEFAULT 0,
                     broken_count INTEGER DEFAULT 0,
+                    first_limitup_count INTEGER DEFAULT 0,
                     UNIQUE(theme_name, trade_date)
                 )
             """)
+            # 确保 first_limitup_count 列存在
+            try:
+                conn.execute("ALTER TABLE theme_limitup_stats ADD COLUMN first_limitup_count INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
             conn.commit()
 
     def calculate(self):
@@ -46,6 +52,19 @@ class LimitupStats:
         if limit_list.empty:
             return {}
 
+        # 获取前一交易日涨停股票，用于判断连板/首板 (PRD: first_limitup_count)
+        prev_limitup_codes = set()
+        try:
+            from datetime import timedelta
+            prev_date = (datetime.strptime(tdate, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
+            prev_list = pro.limit_list(trade_date=prev_date)
+            if not prev_list.empty:
+                for _, row in prev_list.iterrows():
+                    if str(row.get("limit_type", "")) == 'U':
+                        prev_limitup_codes.add(str(row["ts_code"]))
+        except Exception:
+            pass
+
         # 获取 theme_stock_mapping 中每只股票对应的主题
         stock_themes = defaultdict(set)
         try:
@@ -59,28 +78,33 @@ class LimitupStats:
             pass
 
         # 统计各主题的涨停数据
-        theme_stats = defaultdict(lambda: {"limitup": 0, "consecutive": 0, "broken": 0})
+        theme_stats = defaultdict(lambda: {"limitup": 0, "consecutive": 0, "broken": 0, "first": 0})
         for _, row in limit_list.iterrows():
             code = str(row["ts_code"])
-            name = str(row.get("name", ""))
             limit_type = str(row.get("limit_type", "") or "")
-            # 判断涨停/炸板: limit_type='U'=涨停涨停, 'D'=跌停
             for theme in stock_themes.get(code, set()):
                 if limit_type == 'U':
                     theme_stats[theme]["limitup"] += 1
+                    if code in prev_limitup_codes:
+                        theme_stats[theme]["consecutive"] += 1
+                    else:
+                        theme_stats[theme]["first"] += 1
                 elif limit_type == 'D':
                     theme_stats[theme]["broken"] += 1
                 else:
                     theme_stats[theme]["limitup"] += 1
+                    theme_stats[theme]["first"] += 1
 
         # 写入 DB
         with sqlite3.connect(self.db_path) as conn:
             for theme, stats in theme_stats.items():
                 conn.execute("""
                     INSERT OR REPLACE INTO theme_limitup_stats
-                        (theme_name, trade_date, limitup_count, consecutive_count, broken_count)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (theme, tdate, stats["limitup"], stats["consecutive"], stats["broken"]))
+                        (theme_name, trade_date, limitup_count, consecutive_count,
+                         broken_count, first_limitup_count)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (theme, tdate, stats["limitup"], stats["consecutive"],
+                      stats["broken"], stats["first"]))
             conn.commit()
 
         return dict(theme_stats)

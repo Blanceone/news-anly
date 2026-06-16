@@ -55,12 +55,12 @@ class BacktestEngine:
         # 按天分组推荐
         daily_recs = defaultdict(list)
         for r in rows:
-            day = r["created_at"][:10]
+            day = r["score_date"]
             daily_recs[day].append(dict(r))
 
         trades = []
         for day, recs in daily_recs.items():
-            candidates = sorted(recs, key=lambda x: x.get("score", 0), reverse=True)[:top_n]
+            candidates = sorted(recs, key=lambda x: x.get("total_score", 0), reverse=True)[:top_n]
             for rec in candidates:
                 code = rec["stock_code"]
                 # 买入价：当天收盘价
@@ -121,10 +121,14 @@ class BacktestEngine:
             if dd > max_dd:
                 max_dd = dd
 
-        risk_free = 0.02  # 2% 无风险利率
-        excess = [r - risk_free for r in returns]
+        risk_free = 0.02  # 2% 无风险利率(年化)
+        daily_rf = risk_free / 252  # 日化无风险利率
+        excess = [r - daily_rf for r in returns]
         std = (sum((r - avg_ret) ** 2 for r in returns) / len(returns)) ** 0.5 if len(returns) > 1 else 1
-        sharpe = (avg_ret - risk_free) / std * (252 ** 0.5) if std > 0 else 0
+        sharpe = (avg_ret - daily_rf) / std * (252 ** 0.5) if std > 0 else 0
+
+        # 超额收益: 相对沪深300基准 (PRD要求)
+        excess_return = self._calc_excess_return(trades, pro)
 
         result = {
             "trades": trades,
@@ -132,11 +136,46 @@ class BacktestEngine:
             "avg_return": round(avg_ret, 2),
             "max_drawdown": round(max_dd, 2),
             "sharpe_ratio": round(sharpe, 2),
+            "excess_return": round(excess_return, 2),
             "total_trades": len(trades),
         }
         self._save_result(result, strategy, start.strftime("%Y%m%d"),
                           end.strftime("%Y%m%d"), holding_days)
         return result
+
+    def _calc_excess_return(self, trades: list, pro) -> float:
+        """计算相对沪深300的超额收益 (PRD要求)"""
+        if not trades:
+            return 0.0
+        # 获取沪深300基准收益
+        trade_dates = sorted(set(t["trade_date"] for t in trades))
+        benchmark_returns = []
+        try:
+            for day in trade_dates:
+                day_clean = day.replace("-", "")
+                # 沪深300指数代码: 000300.SH
+                idx = pro.index_daily(ts_code="000300.SH",
+                                      start_date=day_clean,
+                                      end_date=(datetime.strptime(day_clean, "%Y%m%d") +
+                                                timedelta(days=20)).strftime("%Y%m%d"))
+                if idx.empty:
+                    continue
+                # 买入日收盘 → 持有N天后收盘
+                buy_close = float(idx.iloc[0].get("close", 0))
+                holding = trades[0].get("holding_days", 3) if trades else 3
+                if len(idx) > holding:
+                    sell_close = float(idx.iloc[holding].get("close", 0))
+                else:
+                    sell_close = float(idx.iloc[-1].get("close", 0))
+                if buy_close > 0:
+                    benchmark_returns.append((sell_close - buy_close) / buy_close * 100)
+        except Exception:
+            pass
+        if not benchmark_returns:
+            return 0.0
+        avg_strategy = sum(t["return_rate"] for t in trades) / len(trades)
+        avg_benchmark = sum(benchmark_returns) / len(benchmark_returns)
+        return avg_strategy - avg_benchmark
 
     def _save_result(self, result: dict, strategy: str,
                      start_date: str, end_date: str, holding_days: int):
@@ -150,7 +189,7 @@ class BacktestEngine:
             """, (strategy, start_date, end_date, holding_days,
                   result["win_rate"], result["avg_return"],
                   result["max_drawdown"], result["sharpe_ratio"],
-                  0, result["total_trades"]))
+                  result["excess_return"], result["total_trades"]))
             bt_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
             for t in result["trades"]:
                 conn.execute("""

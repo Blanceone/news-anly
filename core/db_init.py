@@ -350,6 +350,106 @@ def init_stocks_db():
                 strategy_type TEXT
             )
         """)
+        # ─── V4 概念树系统 ───
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS concept_board (
+                concept_id TEXT PRIMARY KEY,
+                concept_name TEXT NOT NULL,
+                concept_type TEXT DEFAULT 'concept',
+                stock_count INTEGER DEFAULT 0,
+                board_change REAL DEFAULT 0,
+                board_volume REAL DEFAULT 0,
+                up_count INTEGER DEFAULT 0,
+                down_count INTEGER DEFAULT 0,
+                keywords TEXT DEFAULT '',
+                description TEXT DEFAULT '',
+                status TEXT DEFAULT 'active',
+                crawled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS concept_stock_member (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                concept_id TEXT NOT NULL,
+                concept_name TEXT NOT NULL,
+                stock_code TEXT NOT NULL,
+                stock_name TEXT NOT NULL,
+                is_core INTEGER DEFAULT 0,
+                crawled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(concept_id, stock_code)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS stock_fundamentals (
+                stock_code TEXT PRIMARY KEY,
+                stock_name TEXT NOT NULL,
+                industry TEXT DEFAULT '',
+                pe_ttm REAL DEFAULT 0,
+                pb REAL DEFAULT 0,
+                total_mv REAL DEFAULT 0,
+                circ_mv REAL DEFAULT 0,
+                turnover_rate REAL DEFAULT 0,
+                close_price REAL DEFAULT 0,
+                pct_chg REAL DEFAULT 0,
+                company_business TEXT DEFAULT '',
+                roe REAL DEFAULT 0,
+                gross_margin REAL DEFAULT 0,
+                revenue_yoy REAL DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS concept_stock_analysis (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                concept_id TEXT NOT NULL,
+                concept_name TEXT NOT NULL,
+                stock_code TEXT NOT NULL,
+                stock_name TEXT NOT NULL,
+                relevance_ratio REAL DEFAULT 0,
+                chain_position TEXT DEFAULT '',
+                importance_level TEXT DEFAULT 'C',
+                is_real_capability INTEGER DEFAULT 0,
+                analysis_reason TEXT DEFAULT '',
+                llm_model TEXT DEFAULT '',
+                analyzed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(concept_id, stock_code)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS concept_stock_score (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                concept_id TEXT NOT NULL,
+                concept_name TEXT NOT NULL,
+                stock_code TEXT NOT NULL,
+                stock_name TEXT NOT NULL,
+                relevance_score REAL DEFAULT 0,
+                valuation_score REAL DEFAULT 0,
+                quality_score REAL DEFAULT 0,
+                capability_score REAL DEFAULT 0,
+                chain_score REAL DEFAULT 0,
+                total_score REAL DEFAULT 0,
+                rank_in_concept INTEGER DEFAULT 0,
+                scored_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(concept_id, stock_code)
+            )
+        """)
+        # 概念表索引
+        for idx_sql in (
+            "CREATE INDEX IF NOT EXISTS idx_cb_name ON concept_board(concept_name)",
+            "CREATE INDEX IF NOT EXISTS idx_csm_concept ON concept_stock_member(concept_id)",
+            "CREATE INDEX IF NOT EXISTS idx_csm_stock ON concept_stock_member(stock_code)",
+            "CREATE INDEX IF NOT EXISTS idx_sf_industry ON stock_fundamentals(industry)",
+            "CREATE INDEX IF NOT EXISTS idx_sf_mv ON stock_fundamentals(total_mv DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_csa_concept ON concept_stock_analysis(concept_id)",
+            "CREATE INDEX IF NOT EXISTS idx_csa_stock ON concept_stock_analysis(stock_code)",
+            "CREATE INDEX IF NOT EXISTS idx_css_concept ON concept_stock_score(concept_id)",
+            "CREATE INDEX IF NOT EXISTS idx_css_rank ON concept_stock_score(concept_id, rank_in_concept)",
+        ):
+            try:
+                conn.execute(idx_sql)
+            except sqlite3.OperationalError:
+                pass
         conn.commit()
 
 

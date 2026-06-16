@@ -91,7 +91,6 @@ SEED = {
         ("industry", "半导体设备", "technology", "先进制程", "CONTAINS", 85),
         ("industry", "封测", "technology", "Chiplet", "CONTAINS", 90),
         ("industry", "封测", "technology", "HBM", "CONTAINS", 80),
-        ("industry", "减速器", "technology", "Chiplet", "CONTAINS", 0),
         # New theme → industry
         ("theme", "具身智能", "industry", "机器人关节", "CONTAINS", 95),
         ("theme", "具身智能", "industry", "减速器", "CONTAINS", 85),

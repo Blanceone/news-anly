@@ -87,6 +87,24 @@ class ThemeDiscovery:
             pass
         return known
 
+    def _calc_consecutive_days(self, theme_name: str) -> int:
+        """估算连续出现天数: last_seen - first_seen 的天数跨度"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    "SELECT first_seen, last_seen FROM theme_candidate WHERE theme_name=?",
+                    (theme_name,)
+                ).fetchone()
+                if not row or not row["first_seen"] or not row["last_seen"]:
+                    return 1
+                from datetime import datetime
+                first = datetime.fromisoformat(str(row["first_seen"]).replace(" ", "T"))
+                last = datetime.fromisoformat(str(row["last_seen"]).replace(" ", "T"))
+                return max(1, (last - first).days + 1)
+        except Exception:
+            return 1
+
     def discover(self, keywords: list, industry: str = ""):
         """从关键词中发现新概念候选"""
         known = self._load_known_terms()
@@ -117,7 +135,10 @@ class ThemeDiscovery:
                     if existing[2] == "candidate" and new_count >= 3:
                         conn.execute("UPDATE theme_candidate SET status='observing' WHERE theme_name=?", (c,))
                     elif existing[2] == "observing" and new_count >= 20:
-                        conn.execute("UPDATE theme_candidate SET status='official' WHERE theme_name=?", (c,))
+                        # PRD V2: 出现次数>20 且 连续出现天数>3 → official
+                        consecutive = self._calc_consecutive_days(c)
+                        if consecutive > 3:
+                            conn.execute("UPDATE theme_candidate SET status='official' WHERE theme_name=?", (c,))
                     result.append({"theme_name": c, "status": existing[2], "mention_count": new_count})
                 else:
                     conn.execute("""

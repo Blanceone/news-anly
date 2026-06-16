@@ -23,6 +23,9 @@ class NewsScheduler:
         self.knowledge_graph = KnowledgeGraph()
         self.scoring_engine = ScoringEngine()
         self.market_verifier = MarketVerifier()
+        # V4 概念树
+        self._weekly_done = False
+        self._daily_done = False
 
     def _tick(self) -> bool:
         now = datetime.now()
@@ -92,6 +95,14 @@ class NewsScheduler:
                 StockProfile().calculate()
         except Exception as e:
             print(f"  [股票画像] 更新失败: {e}")
+
+        # V4: 概念树周更
+        if self._is_weekly_first_run():
+            self._refresh_concept_tree()
+
+        # V4: 基本面日更
+        if self._is_daily_first_run():
+            self._refresh_fundamentals()
 
         print(f"  [完成] 本次采集")
         return bool(new_news)
@@ -214,11 +225,65 @@ class NewsScheduler:
 
     def _print_ranking(self, stocks: list):
         print(f"\n  ── TOP 推荐榜 ──")
-        print(f"  {'#':>3s} {'代码':7s} {'名称':7s} {'总分':>5s} {'事件':>5s} {'受益':>5s} {'市场':>5s}")
+        print(f"  {'#':>3s} {'代码':7s} {'名称':7s} {'总分':>5s} {'事件':>5s} {'受益':>5s} {'概念':>5s} {'基本面':>5s}")
         for s in stocks:
             print(f"  {s['rank']:3d} {s['stock_code']:7s} {s['stock_name']:6s}  "
-                  f"{int(s['total_score']):5d}  {int(s['event_score']):5d}  {int(s['benefit_score']):5d}  {int(s['market_score']):5d}")
+                  f"{int(s['total_score']):5d}  {int(s['event_score']):5d}  {int(s['benefit_score']):5d}"
+                  f"  {int(s.get('concept_rank', 0)):5d}  {int(s.get('fundamental_score', 0)):5d}")
         print()
+
+    # ─── V4 概念树定时刷新 ────────────────────────────
+
+    def _is_weekly_first_run(self) -> bool:
+        """每周一首次运行时返回 True"""
+        now = datetime.now()
+        if now.weekday() == 0 and not self._weekly_done:
+            self._weekly_done = True
+            return True
+        return False
+
+    def _is_daily_first_run(self) -> bool:
+        """每交易日首次运行时返回 True (16:00后)"""
+        now = datetime.now()
+        if now.weekday() < 5 and now.hour >= 16 and not self._daily_done:
+            self._daily_done = True
+            return True
+        return False
+
+    def _refresh_concept_tree(self):
+        """刷新概念树: 爬取概念列表 + 成分股 + LLM分析 + 排名"""
+        print(f"\n  [V4] 开始刷新概念树...")
+        try:
+            from services.concept_crawler import ConceptCrawler
+            from services.concept_analyzer import ConceptAnalyzer
+            from services.concept_scorer import ConceptScorer
+
+            crawler = ConceptCrawler()
+            result = crawler.refresh_all()
+            if result.get("skipped"):
+                print("  [V4] 概念树已是最新")
+                return
+
+            analyzer = ConceptAnalyzer()
+            analyzer.analyze_changed()
+
+            scorer = ConceptScorer()
+            scorer.score_all()
+
+            print("  [V4] 概念树刷新完成")
+        except Exception as e:
+            print(f"  [V4] 概念树刷新失败: {e}")
+
+    def _refresh_fundamentals(self):
+        """刷新全市场基本面数据"""
+        print(f"\n  [V4] 开始刷新基本面数据...")
+        try:
+            from services.fundamentals_service import FundamentalsService
+            fs = FundamentalsService()
+            fs.refresh_all()
+            print("  [V4] 基本面数据刷新完成")
+        except Exception as e:
+            print(f"  [V4] 基本面数据刷新失败: {e}")
 
     def run(self):
         self._analyze_backlog()

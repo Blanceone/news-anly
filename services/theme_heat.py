@@ -50,6 +50,12 @@ class ThemeHeat:
 
             conn.execute("DELETE FROM theme_heat")
             all_themes = set(news_heat.keys()) | set(board_heat.keys()) | set(limitup_heat.keys())
+
+            # PRD V1: 热度系数 — 主线题材×1.5, 冷门题材×0.5
+            heat_coefficients = self._calc_heat_coefficients(
+                all_themes, news_heat, board_heat, limitup_heat
+            )
+
             for theme in sorted(all_themes):
                 nh = news_heat.get(theme, 0)
                 bh = board_heat.get(theme, 0)
@@ -57,6 +63,10 @@ class ThemeHeat:
                 # V3 公式: 新闻40% + 板块20% + 涨停15%
                 # 注: 资金热度(25%)暂无独立数据源，合并入板块热度
                 raw_heat = int(nh * 0.40 + bh * 0.45 + lh * 0.15)
+
+                # 应用热度系数
+                coeff = heat_coefficients.get(theme, 1.0)
+                raw_heat = int(raw_heat * coeff)
 
                 # 计算 last_active_time
                 prev = existing.get(theme, {})
@@ -86,15 +96,57 @@ class ThemeHeat:
             conn.commit()
             return all_themes
 
+    def _calc_heat_coefficients(self, themes: set, news_heat: dict,
+                                board_heat: dict, limitup_heat: dict) -> dict:
+        """PRD V1: 热度系数 — 主线题材×1.5, 冷门题材×0.5, 其余×1.0
+        主线: 综合得分(新闻+板块+涨停)排名前20%
+        冷门: 综合得分排名后30%
+        """
+        scores = {}
+        for theme in themes:
+            # 跳过 cnt/chg/vol 后缀的伪主题
+            if theme.endswith((':cnt', ':chg', ':vol')):
+                continue
+            nh = news_heat.get(theme, 0)
+            bh = board_heat.get(theme, 0)
+            lh = limitup_heat.get(theme, 0)
+            scores[theme] = nh + bh + lh
+
+        if not scores:
+            return {}
+
+        # 按综合得分排序
+        sorted_themes = sorted(scores.keys(), key=lambda t: scores[t], reverse=True)
+        n = len(sorted_themes)
+        top_threshold = int(n * 0.20)  # 前20%为主线
+        bottom_threshold = int(n * 0.70)  # 后30%为冷门
+
+        coefficients = {}
+        for i, theme in enumerate(sorted_themes):
+            if i < top_threshold:
+                coefficients[theme] = 1.5
+            elif i >= bottom_threshold:
+                coefficients[theme] = 0.5
+            else:
+                coefficients[theme] = 1.0
+        return coefficients
+
     def _known_themes(self) -> set:
-        """从 theme_stock_mapping + stock_basic.industry 获取已知主题"""
+        """从 concept_board + theme_stock_mapping + stock_basic 获取已知主题"""
         known = set()
         try:
             with sqlite3.connect(self.stocks_db) as conn:
+                # V4: 概念树
+                rows = conn.execute(
+                    "SELECT concept_name FROM concept_board WHERE status='active'"
+                ).fetchall()
+                known.update(r[0] for r in rows)
+                # 旧主题映射(兼容)
                 rows = conn.execute(
                     "SELECT DISTINCT theme_name FROM theme_stock_mapping"
                 ).fetchall()
                 known.update(r[0] for r in rows)
+                # 行业板块
                 rows = conn.execute(
                     "SELECT DISTINCT industry FROM stock_basic WHERE industry IS NOT NULL"
                 ).fetchall()

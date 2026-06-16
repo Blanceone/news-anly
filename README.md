@@ -1,9 +1,12 @@
 # A股智能选股终端
 
-实时采集财联社电报 + 巨潮资讯公告 → AI 事件识别 → 知识图谱产业链推理 → 多因子评分 → TUI 终端看板。
+实时采集财联社电报 + 巨潮资讯公告 → AI 事件识别 → **概念树驱动选股** → 多因子评分V4 → TUI 终端看板。
 
 ```text
-新闻/公告  →  AI事件抽取  →  图谱推理受益股  →  综合评分  →  推荐榜 + TUI看板
+新闻/公告  →  AI事件抽取  →  概念树匹配受益股  →  综合评分V4  →  推荐榜 + TUI看板
+                                   ↑
+                         东方财富概念树(300+)
+                         每周爬取 + LLM分析
 ```
 
 ## 项目结构
@@ -14,18 +17,22 @@
 │   ├── cls.py              # 财联社 (签名API，增量拉取)
 │   └── cninfo.py           # 巨潮资讯 (POST分页，增量拉取)
 ├── services/               # 业务服务层
+│   ├── concept_crawler.py  # 东方财富概念树爬虫 (AKShare, 300+概念)
+│   ├── concept_analyzer.py # LLM概念分析 (关联度/产业链/重要性)
+│   ├── concept_scorer.py   # 概念内排名引擎 (估值+质量+能力)
+│   ├── fundamentals_service.py # 全市场基本面 (PE/PB/ROE/市值)
 │   ├── event_service.py    # AI事件识别 (LLM结构化JSON)
-│   ├── stock_service.py    # 股票关联映射 (10主题57只受益股, 含受益链分层)
+│   ├── stock_service.py    # 股票关联映射 (概念树三层匹配, 含受益链分层)
 │   ├── knowledge_graph.py  # 知识图谱 (47实体 + BFS推理引擎)
-│   ├── scoring_engine.py   # 综合评分 V3 (7维公式)
+│   ├── scoring_engine.py   # 综合评分 V4 (9维公式)
 │   ├── market_verifier.py  # 市场验证 (Tushare主力+AKShare补充)
-│   ├── theme_heat.py       # 主题热度 (含时间衰减 + 涨停热度)
+│   ├── theme_heat.py       # 主题热度 (含时间衰减 + 涨停热度 + 热度系数)
 │   ├── theme_discovery.py  # 新概念自动发现
 │   ├── embedding_service.py# TF-IDF语义匹配
 │   ├── event_cluster.py    # 事件聚类 (含生命周期管理)
-│   ├── stock_profile.py    # 股票画像+龙头评分 V3
-│   ├── limitup_stats.py    # 涨停热度统计 V3
-│   └── backtest.py         # 回测系统 V3
+│   ├── stock_profile.py    # 股票画像+龙头评分 (含PE/PB)
+│   ├── limitup_stats.py    # 涨停热度统计 (含首板家数)
+│   └── backtest.py         # 回测系统 (含超额收益vs沪深300)
 ├── core/
 │   ├── db_init.py          # 双数据库初始化 (news.db + stocks.db)
 │   ├── scheduler.py        # 采集→分析→评分 全链路编排
@@ -129,9 +136,12 @@ Dashboard 每10秒自动刷新，其余页面每30秒自动刷新。
 - 8大事件类型：ORDER / EARNINGS / TECHNOLOGY / POLICY / MNA / CAPITAL / RISK / OTHER
 - JSON 输出校验 + 3次重试
 
-### 3. 股票关联映射
-- 10大主题 57 只受益股：AI/算力/半导体/机器人/创新药/先进封装/具身智能/低空经济/新能源/CPO
-- 关键词+行业自动匹配事件与主题
+### 3. 概念树选股 (V4)
+- 东方财富 300+ 概念板块，AKShare 自动爬取，每周更新
+- 三层匹配：精确匹配概念名 → 关键词匹配 → Embedding 语义匹配
+- LLM 分析每只成分股：主营关联度 / 产业链位置 / 重要性等级 / 真实能力
+- 概念内排名公式：主营×30% + 估值×20% + 质量×20% + 能力×15% + 产业链×15%
+- 全市场基本面数据：PE/PB/市值/ROE/毛利率，每日刷新
 
 ### 4. 知识图谱推理
 - 5种实体：Theme → Industry → Technology → Product → Stock
@@ -140,18 +150,21 @@ Dashboard 每10秒自动刷新，其余页面每30秒自动刷新。
 - 37实体 / 53关系 / 42直连受益
 - 初始覆盖：AI/算力/半导体/先进封装/具身智能/低空经济/新能源/CPO/创新药 十大主题
 
-### 5. 综合评分 (V3)
+### 5. 综合评分 (V4)
 ```
-总分 = 事件×15% + 受益(分层)×20% + 市场×15%
-     + 热度(衰减)×15% + 簇(生命周期)×10%
-     + 龙头评分×15% + 生命周期系数×10%
+总分 = 事件×12% + 受益(分层)×18% + 概念排名×10% + 市场×12%
+     + 热度(衰减)×13% + 簇(生命周期)×8%
+     + 龙头评分×12% + 生命周期系数×8% + 基本面×7%
 ```
-- **EventScore**: S=100 / A=80 / B=60 / C=40
+- **EventScore**: S=100 / A=80 / B=60 / C=40 (4维: 新闻级别30%+金额20%+行业影响30%+稀缺性20%)
 - **BenefitScore**: 分层加权 DIRECT×1.0 / INDIRECT×0.8 / SENTIMENT×0.5
+- **ConceptRank**: 概念内排名得分 (LLM分析+基本面综合评分)
 - **MarketScore**: 板块涨跌幅+涨跌比+成交额 (0-100)
-- **ThemeHeat**: 含时间衰减（半衰期3天）+ 涨停热度
+- **ThemeHeat**: 含时间衰减（半衰期3天）+ 涨停热度 + 热度系数(主线×1.5/冷门×0.5)
 - **ClusterHeat**: 生命周期加权 BIRTH(0.8) / GROWING(1.0) / PEAK(0.7) / DECLINING(0.3) / DEAD(0.0)
 - **LeaderScore**: 流动性×20% + 活跃度×30% + 题材数×20% + 涨停历史×30%
+- **FundamentalScore**: PE合理性×40% + ROE×35% + 市值×25%
+- 策略输出: HOT / THEME / LATENT / VALUE
 
 ### 6. 市场验证
 - 交易时段（工作日 9:25-15:00）自动运行
@@ -161,7 +174,7 @@ Dashboard 每10秒自动刷新，其余页面每30秒自动刷新。
 
 ### 7. 双数据库架构
 - **news.db**: news / reports / event_analysis
-- **stocks.db**: stock_basic / theme_stock_mapping / event_stock_mapping / market_confirmation / stock_score / recommendation_result / kg_entity / kg_relation / kg_direct_benefit / sector_cache / theme_candidate / theme_embedding / event_cluster / event_cluster_map / theme_heat / stock_profile / theme_limitup_stats / backtest_result / backtest_trades
+- **stocks.db**: stock_basic / theme_stock_mapping / event_stock_mapping / market_confirmation / stock_score / recommendation_result / kg_entity / kg_relation / kg_direct_benefit / sector_cache / theme_candidate / theme_embedding / event_cluster / event_cluster_map / theme_heat / stock_profile / theme_limitup_stats / backtest_result / backtest_trades / **concept_board** / **concept_stock_member** / **stock_fundamentals** / **concept_stock_analysis** / **concept_stock_score**
 - 跨库 JOIN 在 Python 应用层合并
 
 ### 8. 采集即分析
@@ -240,3 +253,10 @@ Dashboard 每10秒自动刷新，其余页面每30秒自动刷新。
 | V3-5 | 事件生命周期（BIRTH→DEAD） | ✅ |
 | V3-6 | 推荐引擎V3（7维评分） | ✅ |
 | V3-7 | 回测系统（胜率/夏普/回撤） | ✅ |
+| V4-1 | 概念树爬虫（东方财富300+概念，AKShare） | ✅ |
+| V4-2 | LLM概念分析（关联度/产业链/重要性/真实能力） | ✅ |
+| V4-3 | 概念内排名引擎（估值+质量+能力综合评分） | ✅ |
+| V4-4 | 全市场基本面服务（PE/PB/ROE/市值/主营业务） | ✅ |
+| V4-5 | 事件→概念树匹配（精确/关键词/Embedding三层） | ✅ |
+| V4-6 | 评分引擎V4（9维公式+VALUE策略） | ✅ |
+| V4-7 | 概念树定时刷新（周更）+ 基本面日更 | ✅ |

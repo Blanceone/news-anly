@@ -117,9 +117,39 @@ class EventService:
             """)
             conn.commit()
 
-    def _compute_event_score(self, importance: str, novelty: int) -> int:
-        base = {"S": 100, "A": 80, "B": 60, "C": 40}.get(importance, 40)
-        return int(base * 0.7 + novelty * 0.3)
+    def _compute_amount_score(self, amount: float, unit: str) -> int:
+        """PRD: 涉及金额评分 (0-100)"""
+        # 统一换算为"亿元"
+        if "亿" in unit:
+            val = amount
+        elif "万" in unit:
+            val = amount / 10000
+        else:
+            val = amount / 1e8
+        if val >= 100:
+            return 100
+        elif val >= 50:
+            return 80
+        elif val >= 10:
+            return 60
+        elif val >= 1:
+            return 40
+        elif val > 0:
+            return 20
+        return 0
+
+    def _compute_event_score(self, importance: str, novelty: int,
+                             amount: float = 0, amount_unit: str = "") -> int:
+        """PRD V1 事件强度评分公式:
+        新闻级别×30% + 涉及金额×20% + 行业影响×30% + 稀缺性×20%
+        """
+        news_level = {"S": 100, "A": 80, "B": 60, "C": 40}.get(importance, 40)
+        amount_score = self._compute_amount_score(amount, amount_unit)
+        # 行业影响: 高重要性事件通常具有广泛行业影响
+        industry_impact = news_level
+        scarcity = novelty
+        return int(news_level * 0.30 + amount_score * 0.20 +
+                   industry_impact * 0.30 + scarcity * 0.20)
 
     def extract(self, title: str, content: str) -> dict:
         if not self.llm.available:
@@ -162,6 +192,8 @@ class EventService:
             sentiment = "neutral"
         novelty = int(data.get("novelty_score", 0) or 0)
         novelty = max(0, min(100, novelty))
+        amount = float(data.get("amount", 0) or 0)
+        amount_unit = str(data.get("amount_unit", ""))
         return {
             "event_type": event_type,
             "event_subtype": str(data.get("event_subtype", "")),
@@ -170,11 +202,11 @@ class EventService:
             "sentiment": sentiment,
             "importance": importance,
             "novelty_score": novelty,
-            "event_score": self._compute_event_score(importance, novelty),
+            "event_score": self._compute_event_score(importance, novelty, amount, amount_unit),
             "entities": data.get("entities", []),
             "companies": data.get("companies", []),
-            "amount": float(data.get("amount", 0) or 0),
-            "amount_unit": str(data.get("amount_unit", "")),
+            "amount": amount,
+            "amount_unit": amount_unit,
             "keywords": data.get("keywords", []),
             "ai_summary": str(data.get("summary", "")),
             "reason": str(data.get("reason", "")),

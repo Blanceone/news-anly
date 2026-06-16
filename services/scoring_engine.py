@@ -1,9 +1,9 @@
-"""评分系统 — Phase 6 (V3)
+"""评分系统 — Phase V4
 
-V3 公式：
-  TotalScore = EventScore×15% + BenefitScore(分层)×20% + MarketScore×15%
-             + ThemeHeat(衰减)×15% + ClusterHeat(生命周期)×10%
-             + LeaderScore×15% + LifecycleScore×10%
+V4 公式：
+  TotalScore = EventScore×12% + BenefitScore(分层)×18% + ConceptRank×10%
+             + MarketScore×12% + ThemeHeat(衰减)×13% + ClusterHeat(生命周期)×8%
+             + LeaderScore×12% + LifecycleScore×8% + FundamentalScore×7%
 """
 import sqlite3
 from collections import defaultdict
@@ -222,6 +222,77 @@ class ScoringEngine:
         except Exception:
             return 0
 
+    def _load_concept_rank_score(self, stock_code: str) -> float:
+        """从 concept_stock_score 获取最佳概念排名得分"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                row = conn.execute("""
+                    SELECT MAX(total_score) FROM concept_stock_score
+                    WHERE stock_code=?
+                """, (stock_code,)).fetchone()
+                return float(row[0]) if row and row[0] else 0
+        except Exception:
+            return 0
+
+    def _load_fundamental_score(self, stock_code: str) -> float:
+        """基本面评分: PE合理性 + PB合理性 + ROE"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                row = conn.execute("""
+                    SELECT pe_ttm, pb, roe, total_mv
+                    FROM stock_fundamentals WHERE stock_code=?
+                """, (stock_code,)).fetchone()
+                if not row:
+                    return 0
+                pe = float(row[0] or 0)
+                pb = float(row[1] or 0)
+                roe = float(row[2] or 0)
+                mv = float(row[3] or 0)
+
+                # PE 评分
+                pe_s = 50.0
+                if pe > 0:
+                    if pe < 15:
+                        pe_s = 100
+                    elif pe < 30:
+                        pe_s = 75
+                    elif pe < 60:
+                        pe_s = 50
+                    elif pe < 100:
+                        pe_s = 25
+                    else:
+                        pe_s = 10
+                elif pe < 0:
+                    pe_s = 10
+
+                # ROE 评分
+                roe_s = 30.0
+                if roe >= 15:
+                    roe_s = 100
+                elif roe >= 10:
+                    roe_s = 80
+                elif roe >= 5:
+                    roe_s = 60
+                elif roe >= 0:
+                    roe_s = 30
+                else:
+                    roe_s = 10
+
+                # 市值评分
+                mv_s = 30.0
+                if mv >= 500:
+                    mv_s = 100
+                elif mv >= 100:
+                    mv_s = 70
+                elif mv >= 30:
+                    mv_s = 50
+                elif mv > 0:
+                    mv_s = 20
+
+                return pe_s * 0.4 + roe_s * 0.35 + mv_s * 0.25
+        except Exception:
+            return 0
+
     def _rank(self, stock_data: dict) -> list:
         theme_heat = self._load_theme_heat()
         all_event_ids = list({e["event_id"]
@@ -255,14 +326,22 @@ class ScoringEngine:
             # 龙头评分
             leader_score = self._load_leader_score(code)
 
-            # V3 公式
-            total = (event_score * 0.15 +
-                     benefit_score * 0.20 +
-                     market_score * 0.15 +
-                     theme_heat_val * 0.15 +
-                     cluster_max * 0.10 +
-                     leader_score * 0.15 +
-                     lifecycle_score * 0.10)
+            # V4 新增: 概念排名得分
+            concept_rank_score = self._load_concept_rank_score(code)
+
+            # V4 新增: 基本面得分
+            fundamental_score = self._load_fundamental_score(code)
+
+            # V4 公式
+            total = (event_score * 0.12 +
+                     benefit_score * 0.18 +
+                     concept_rank_score * 0.10 +
+                     market_score * 0.12 +
+                     theme_heat_val * 0.13 +
+                     cluster_max * 0.08 +
+                     leader_score * 0.12 +
+                     lifecycle_score * 0.08 +
+                     fundamental_score * 0.07)
 
             top_events = sorted(data["events"], key=lambda x: -x.get("event_id", 0))[:3]
             results.append({
@@ -275,6 +354,8 @@ class ScoringEngine:
                 "cluster_heat": round(cluster_max),
                 "leader_score": round(leader_score),
                 "lifecycle_weight": round(lifecycle_weight, 2),
+                "concept_rank": round(concept_rank_score),
+                "fundamental_score": round(fundamental_score),
                 "financial_score": 0,
                 "technical_score": 0,
                 "capital_score": 0,
@@ -309,15 +390,17 @@ class ScoringEngine:
                 # 多维策略输出
                 strategies = [
                     ("HOT", r["total_score"],
-                     f"事件{r['event_score']}*15%+受益(分层){r['benefit_score']}*20%+"
-                     f"市场{r['market_score']}*15%+热度{r['theme_heat']}*15%+"
-                     f"簇{r['cluster_heat']}*10%+龙头{r['leader_score']}*15%+"
-                     f"生命周期{r['lifecycle_weight']}*10%"),
+                     f"事件{r['event_score']}*12%+受益{r['benefit_score']}*18%+"
+                     f"概念排名{r.get('concept_rank', 0)}*10%+市场{r['market_score']}*12%+"
+                     f"热度{r['theme_heat']}*13%+龙头{r['leader_score']}*12%+"
+                     f"基本面{r.get('fundamental_score', 0)}*7%"),
                 ]
                 if r["theme_heat"] >= 50:
                     strategies.append(("THEME", r["theme_heat"], "热点题材"))
                 if r["lifecycle_weight"] >= 0.8 and r["theme_heat"] < 30:
                     strategies.append(("LATENT", r["total_score"], "潜伏题材(早期+低热度)"))
+                if r.get("fundamental_score", 0) >= 60:
+                    strategies.append(("VALUE", r["fundamental_score"], "价值标的(低估值+高质量)"))
                 for stype, score, reason in strategies:
                     conn.execute("""
                         INSERT INTO recommendation_result
@@ -326,7 +409,7 @@ class ScoringEngine:
                     """, (r["stock_code"], r["stock_name"], stype,
                           r["rank"], score, reason))
             conn.commit()
-        print(f"  [评分] 已计算 {len(results)} 只股票的综合评分(V3)")
+        print(f"  [评分] 已计算 {len(results)} 只股票的综合评分(V4)")
 
     def get_top_stocks(self, limit=20, strategy="HOT") -> list:
         with sqlite3.connect(self.db_path) as conn:

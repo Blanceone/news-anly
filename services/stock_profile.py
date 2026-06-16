@@ -26,9 +26,22 @@ class StockProfile:
                     volatility REAL DEFAULT 0,
                     limitup_history INTEGER DEFAULT 0,
                     leader_score REAL DEFAULT 0,
+                    pe_ttm REAL DEFAULT 0,
+                    pb REAL DEFAULT 0,
+                    company_business TEXT DEFAULT '',
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            # 确保新列存在
+            for col_sql in (
+                "ALTER TABLE stock_profile ADD COLUMN pe_ttm REAL DEFAULT 0",
+                "ALTER TABLE stock_profile ADD COLUMN pb REAL DEFAULT 0",
+                "ALTER TABLE stock_profile ADD COLUMN company_business TEXT DEFAULT ''",
+            ):
+                try:
+                    conn.execute(col_sql)
+                except sqlite3.OperationalError:
+                    pass
             conn.commit()
 
     def _last_trade_date(self):
@@ -72,15 +85,17 @@ class StockProfile:
                 chg_map[code]["amount"] = float(row.get("amount", 0) or 0)
                 chg_map[code]["pct_chg"] = float(row.get("pct_chg", 0) or 0)
 
-        # 近20日daily_basic (换手率)
+        # 近20日daily_basic (换手率 + PE/PB)
         turnover_map = {}
-        db20 = pro.daily_basic(trade_date=tdate, fields='ts_code,turnover_rate,total_mv')
+        db20 = pro.daily_basic(trade_date=tdate, fields='ts_code,turnover_rate,total_mv,pe_ttm,pb')
         if not db20.empty:
             for _, row in db20.iterrows():
                 code = str(row["ts_code"])
                 turnover_map[code] = {
                     "turnover": float(row.get("turnover_rate", 0) or 0),
                     "market_value": float(row.get("total_mv", 0) or 0) / 1e8,
+                    "pe_ttm": float(row.get("pe_ttm", 0) or 0),
+                    "pb": float(row.get("pb", 0) or 0),
                 }
 
         # 3. 涨停历史
@@ -128,6 +143,8 @@ class StockProfile:
                 "theme_count": tc,
                 "volatility": round(vol, 2),
                 "limitup_history": lu_count,
+                "pe_ttm": round(t.get("pe_ttm", 0), 2),
+                "pb": round(t.get("pb", 0), 2),
             })
 
         if not records:
@@ -140,6 +157,7 @@ class StockProfile:
                     "industry": info["industry"],
                     "market_cap": 0, "turnover_rate": 0,
                     "theme_count": tc, "volatility": 0, "limitup_history": 0,
+                    "pe_ttm": 0, "pb": 0,
                 })
 
         max_vals = {}
@@ -160,11 +178,13 @@ class StockProfile:
                 conn.execute("""
                     INSERT INTO stock_profile
                         (stock_code, stock_name, market_cap, turnover_rate, theme_count,
-                         industry, volatility, limitup_history, leader_score, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         industry, volatility, limitup_history, leader_score,
+                         pe_ttm, pb, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (r["stock_code"], r["stock_name"], r["market_cap"],
                       r["turnover_rate"], r["theme_count"], r["industry"],
                       r["volatility"], r["limitup_history"], r["leader_score"],
+                      r.get("pe_ttm", 0), r.get("pb", 0),
                       datetime.now().isoformat()))
             conn.commit()
         return records

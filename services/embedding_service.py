@@ -37,11 +37,34 @@ class EmbeddingService:
         self._is_seeded = False
 
     def _build_theme_texts(self) -> list:
-        from services.stock_service import INITIAL_THEMES
+        """从 concept_board 表构建主题文本（优先），fallback 到旧 theme_stock_mapping"""
         result = []
-        for key, data in INITIAL_THEMES.items():
-            text = f"{data['name']} {' '.join(data['keywords'])}"
-            result.append({"key": key, "name": data['name'], "text": text})
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    "SELECT concept_name, keywords FROM concept_board WHERE status='active'"
+                ).fetchall()
+                for r in rows:
+                    name = r["concept_name"]
+                    kws = r["keywords"] or ""
+                    text = f"{name} {kws}"
+                    result.append({"key": name, "name": name, "text": text})
+        except Exception:
+            pass
+        # 如果概念树为空，从 theme_stock_mapping 构建
+        if not result:
+            try:
+                with sqlite3.connect(self.db_path) as conn:
+                    conn.row_factory = sqlite3.Row
+                    rows = conn.execute("""
+                        SELECT DISTINCT theme_name FROM theme_stock_mapping
+                    """).fetchall()
+                    for r in rows:
+                        name = r["theme_name"]
+                        result.append({"key": name, "name": name, "text": name})
+            except Exception:
+                pass
         return result
 
     def seed_embeddings(self):
