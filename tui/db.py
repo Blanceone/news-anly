@@ -1,4 +1,7 @@
-"""TUI 数据查询层 — 连接 news.db + concept.db"""
+"""TUI 数据查询层 — 连接 news.db + concept.db
+
+适配 V3 Final Spec 表结构。
+"""
 import sqlite3
 from datetime import datetime, timedelta
 from config import Config
@@ -11,6 +14,9 @@ class TuiDB:
 
     # ──────────────────────────────────────────
     # Dashboard (Tab 1)
+    # Spec 6.1: 当前时间、SOP阶段、大盘量能状态
+    #           main_concept概念列表+最高连板龙头
+    #           风控预警信号
     # ──────────────────────────────────────────
 
     def dashboard_stats(self) -> dict:
@@ -34,7 +40,7 @@ class TuiDB:
         try:
             with sqlite3.connect(self.concept_db) as conn:
                 stats["concepts_total"] = conn.execute(
-                    "SELECT COUNT(*) FROM concept_candidate WHERE lifecycle != 'DEAD'"
+                    "SELECT COUNT(*) FROM concept_candidate"
                 ).fetchone()[0]
                 stats["concepts_validated"] = conn.execute(
                     "SELECT COUNT(*) FROM concept_candidate WHERE status='validated'"
@@ -72,7 +78,7 @@ class TuiDB:
                 rows = conn.execute("""
                     SELECT e.*, n.title as news_title
                     FROM event_analysis e
-                    LEFT JOIN news n ON e.source_id = n.id
+                    LEFT JOIN news n ON e.news_id = n.id
                     ORDER BY e.created_at DESC LIMIT ?
                 """, (limit,)).fetchall()
                 return [dict(r) for r in rows]
@@ -91,8 +97,30 @@ class TuiDB:
         except Exception:
             return []
 
+    def main_concepts_today(self, trade_date: str = None) -> list:
+        """今日 main_concept 概念列表 + 最高连板龙头"""
+        if not trade_date:
+            trade_date = datetime.now().strftime("%Y-%m-%d")
+        try:
+            with sqlite3.connect(self.concept_db) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute("""
+                    SELECT cs.*, cc.standard_name,
+                           ls.max_consecutive_boards, ls.limitup_count
+                    FROM concept_score cs
+                    JOIN concept_candidate cc ON cs.concept_id = cc.id
+                    LEFT JOIN limitup_stats ls ON cs.concept_id = ls.concept_id
+                        AND cs.trade_date = ls.trade_date
+                    WHERE cs.trade_date = ? AND cs.verdict = 'main_concept'
+                    ORDER BY cs.signal_count DESC
+                """, (trade_date,)).fetchall()
+                return [dict(r) for r in rows]
+        except Exception:
+            return []
+
     # ──────────────────────────────────────────
     # Concepts (Tab 2)
+    # Spec 6.2: 标准概念名、状态、提及次数、最新验证结果、信号达成数
     # ──────────────────────────────────────────
 
     def concepts(self, status=None, limit=100) -> list:
@@ -102,53 +130,67 @@ class TuiDB:
                 conn.row_factory = sqlite3.Row
                 if status:
                     rows = conn.execute("""
-                        SELECT * FROM concept_candidate
-                        WHERE status=? ORDER BY mention_count DESC LIMIT ?
+                        SELECT cc.*,
+                               (SELECT verdict FROM concept_score
+                                WHERE concept_id=cc.id ORDER BY trade_date DESC LIMIT 1) as latest_verdict,
+                               (SELECT signal_count FROM concept_score
+                                WHERE concept_id=cc.id ORDER BY trade_date DESC LIMIT 1) as latest_signals
+                        FROM concept_candidate cc
+                        WHERE cc.status=?
+                        ORDER BY cc.mention_count DESC LIMIT ?
                     """, (status, limit)).fetchall()
                 else:
                     rows = conn.execute("""
-                        SELECT * FROM concept_candidate
-                        WHERE lifecycle != 'DEAD'
-                        ORDER BY mention_count DESC LIMIT ?
+                        SELECT cc.*,
+                               (SELECT verdict FROM concept_score
+                                WHERE concept_id=cc.id ORDER BY trade_date DESC LIMIT 1) as latest_verdict,
+                               (SELECT signal_count FROM concept_score
+                                WHERE concept_id=cc.id ORDER BY trade_date DESC LIMIT 1) as latest_signals
+                        FROM concept_candidate cc
+                        ORDER BY cc.mention_count DESC LIMIT ?
                     """, (limit,)).fetchall()
                 return [dict(r) for r in rows]
         except Exception:
             return []
 
-    def concept_detail(self, concept_id: str) -> dict:
+    def concept_detail(self, concept_id: int) -> dict:
         """概念详情"""
         try:
             with sqlite3.connect(self.concept_db) as conn:
                 conn.row_factory = sqlite3.Row
                 row = conn.execute(
-                    "SELECT * FROM concept_candidate WHERE concept_id=?",
+                    "SELECT * FROM concept_candidate WHERE id=?",
                     (concept_id,)
                 ).fetchone()
                 return dict(row) if row else {}
         except Exception:
             return {}
 
-    def concept_events(self, concept_id: str) -> list:
+    def concept_events(self, concept_id: int) -> list:
         """概念关联事件"""
         try:
-            with sqlite3.connect(self.concept_db) as conn:
+            with sqlite3.connect(self.news_db) as conn:
                 conn.row_factory = sqlite3.Row
                 rows = conn.execute("""
-                    SELECT * FROM concept_event
-                    WHERE concept_id=? ORDER BY created_at DESC
+                    SELECT ea.*, ce.trade_date
+                    FROM event_analysis ea
+                    JOIN concept_event ce ON ea.id = ce.event_id
+                    WHERE ce.concept_id=?
+                    ORDER BY ce.trade_date DESC
                 """, (concept_id,)).fetchall()
                 return [dict(r) for r in rows]
         except Exception:
             return []
 
-    def concept_stocks(self, concept_id: str) -> list:
+    def concept_stocks(self, concept_id: int) -> list:
         """概念成分股"""
         try:
             with sqlite3.connect(self.concept_db) as conn:
                 conn.row_factory = sqlite3.Row
                 rows = conn.execute("""
                     SELECT * FROM concept_stock
-                    WHERE concept_id=? ORDER BY is_core DESC, role ASC
+                    WHERE concept_id=?
+                    ORDER BY is_target DESC, role ASC
                 """, (concept_id,)).fetchall()
                 return [dict(r) for r in rows]
         except Exception:
@@ -156,24 +198,38 @@ class TuiDB:
 
     # ──────────────────────────────────────────
     # Validation (Tab 3)
+    # Spec 6.3: 左侧7信号状态+evidence, 右侧个股3步验证
     # ──────────────────────────────────────────
 
-    def concept_validations(self, concept_id: str = None) -> list:
+    def concept_validations(self, concept_id: int = None,
+                            trade_date: str = None) -> list:
         """7信号验证结果"""
         try:
             with sqlite3.connect(self.concept_db) as conn:
                 conn.row_factory = sqlite3.Row
                 if concept_id:
                     rows = conn.execute("""
-                        SELECT * FROM concept_validation
-                        WHERE concept_id=? ORDER BY checked_at DESC
+                        SELECT cv.*, cc.standard_name
+                        FROM concept_validation cv
+                        JOIN concept_candidate cc ON cv.concept_id = cc.id
+                        WHERE cv.concept_id=?
+                        ORDER BY cv.trade_date DESC, cv.signal_no
                     """, (concept_id,)).fetchall()
+                elif trade_date:
+                    rows = conn.execute("""
+                        SELECT cv.*, cc.standard_name
+                        FROM concept_validation cv
+                        JOIN concept_candidate cc ON cv.concept_id = cc.id
+                        WHERE cv.trade_date=?
+                        ORDER BY cv.concept_id, cv.signal_no
+                    """, (trade_date,)).fetchall()
                 else:
                     rows = conn.execute("""
-                        SELECT cv.*, cc.concept_name
+                        SELECT cv.*, cc.standard_name
                         FROM concept_validation cv
-                        JOIN concept_candidate cc ON cv.concept_id = cc.concept_id
-                        ORDER BY cv.checked_at DESC LIMIT 200
+                        JOIN concept_candidate cc ON cv.concept_id = cc.id
+                        ORDER BY cv.trade_date DESC, cv.concept_id
+                        LIMIT 200
                     """).fetchall()
                 return [dict(r) for r in rows]
         except Exception:
@@ -185,14 +241,16 @@ class TuiDB:
             with sqlite3.connect(self.concept_db) as conn:
                 conn.row_factory = sqlite3.Row
                 rows = conn.execute("""
-                    SELECT * FROM concept_score
-                    ORDER BY scored_at DESC LIMIT ?
+                    SELECT cs.*, cc.standard_name
+                    FROM concept_score cs
+                    JOIN concept_candidate cc ON cs.concept_id = cc.id
+                    ORDER BY cs.trade_date DESC LIMIT ?
                 """, (limit,)).fetchall()
                 return [dict(r) for r in rows]
         except Exception:
             return []
 
-    def stock_validations(self, concept_id: str = None) -> list:
+    def stock_validations(self, concept_id: int = None) -> list:
         """个股3步验证"""
         try:
             with sqlite3.connect(self.concept_db) as conn:
@@ -200,12 +258,12 @@ class TuiDB:
                 if concept_id:
                     rows = conn.execute("""
                         SELECT * FROM stock_validation
-                        WHERE concept_id=? ORDER BY stock_code, step
+                        WHERE concept_id=? ORDER BY stock_code
                     """, (concept_id,)).fetchall()
                 else:
                     rows = conn.execute("""
                         SELECT * FROM stock_validation
-                        ORDER BY checked_at DESC LIMIT 200
+                        ORDER BY trade_date DESC LIMIT 200
                     """).fetchall()
                 return [dict(r) for r in rows]
         except Exception:
@@ -213,18 +271,19 @@ class TuiDB:
 
     # ──────────────────────────────────────────
     # Capital (Tab 4)
+    # Spec 6.4: 涨停梯队(按概念聚合)、龙虎榜知名游资、北向TOP10
     # ──────────────────────────────────────────
 
-    def capital_anomalies(self, hours=48) -> list:
+    def capital_anomalies(self, days=2) -> list:
         """资金异动"""
         try:
             with sqlite3.connect(self.concept_db) as conn:
                 conn.row_factory = sqlite3.Row
                 rows = conn.execute("""
                     SELECT * FROM capital_anomaly
-                    WHERE created_at > datetime('now', ? || ' hours')
-                    ORDER BY created_at DESC LIMIT 200
-                """, (str(hours),)).fetchall()
+                    WHERE trade_date >= date('now', ? || ' days')
+                    ORDER BY trade_date DESC LIMIT 200
+                """, (str(-days),)).fetchall()
                 return [dict(r) for r in rows]
         except Exception:
             return []
@@ -236,13 +295,19 @@ class TuiDB:
                 conn.row_factory = sqlite3.Row
                 if trade_date:
                     rows = conn.execute("""
-                        SELECT * FROM limitup_stats
-                        WHERE trade_date=? ORDER BY limitup_count DESC
+                        SELECT ls.*, cc.standard_name as concept_name
+                        FROM limitup_stats ls
+                        JOIN concept_candidate cc ON ls.concept_id = cc.id
+                        WHERE ls.trade_date=?
+                        ORDER BY ls.limitup_count DESC
                     """, (trade_date,)).fetchall()
                 else:
                     rows = conn.execute("""
-                        SELECT * FROM limitup_stats
-                        ORDER BY trade_date DESC, limitup_count DESC LIMIT ?
+                        SELECT ls.*, cc.standard_name as concept_name
+                        FROM limitup_stats ls
+                        JOIN concept_candidate cc ON ls.concept_id = cc.id
+                        ORDER BY ls.trade_date DESC, ls.limitup_count DESC
+                        LIMIT ?
                     """, (limit,)).fetchall()
                 return [dict(r) for r in rows]
         except Exception:
@@ -256,12 +321,12 @@ class TuiDB:
                 if trade_date:
                     rows = conn.execute("""
                         SELECT * FROM dragon_tiger
-                        WHERE trade_date=? ORDER BY net_amount DESC
+                        WHERE trade_date=? ORDER BY net_buy DESC
                     """, (trade_date,)).fetchall()
                 else:
                     rows = conn.execute("""
                         SELECT * FROM dragon_tiger
-                        ORDER BY trade_date DESC, net_amount DESC LIMIT ?
+                        ORDER BY trade_date DESC, net_buy DESC LIMIT ?
                     """, (limit,)).fetchall()
                 return [dict(r) for r in rows]
         except Exception:
@@ -273,15 +338,34 @@ class TuiDB:
             with sqlite3.connect(self.concept_db) as conn:
                 conn.row_factory = sqlite3.Row
                 rows = conn.execute("""
-                    SELECT * FROM northbound_flow
+                    SELECT trade_date, SUM(net_buy) as total_net_buy, COUNT(*) as stock_count
+                    FROM northbound_flow
+                    GROUP BY trade_date
                     ORDER BY trade_date DESC LIMIT ?
                 """, (days,)).fetchall()
                 return [dict(r) for r in rows]
         except Exception:
             return []
 
+    def northbound_top10(self, trade_date: str = None) -> list:
+        """北向净买入TOP10"""
+        if not trade_date:
+            trade_date = datetime.now().strftime("%Y-%m-%d")
+        try:
+            with sqlite3.connect(self.concept_db) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute("""
+                    SELECT * FROM northbound_flow
+                    WHERE trade_date=?
+                    ORDER BY net_buy DESC LIMIT 10
+                """, (trade_date,)).fetchall()
+                return [dict(r) for r in rows]
+        except Exception:
+            return []
+
     # ──────────────────────────────────────────
     # Sources (Tab 5)
+    # Spec 6.5: 各Tier最后运行时间、今日采集条数、最新3条源头标题
     # ──────────────────────────────────────────
 
     def source_stats(self) -> dict:
@@ -305,13 +389,11 @@ class TuiDB:
             with sqlite3.connect(self.concept_db) as conn:
                 conn.row_factory = sqlite3.Row
                 rows = conn.execute("""
-                    SELECT rc.concept_id, cc.concept_name,
-                           SUM(rc.is_passed) as passed, COUNT(*) as total
+                    SELECT rc.concept_id, cc.standard_name, rc.risk_type, rc.detail
                     FROM risk_check rc
-                    JOIN concept_candidate cc ON rc.concept_id = cc.concept_id
-                    WHERE rc.checked_at > datetime('now', '-1 day')
-                    GROUP BY rc.concept_id
-                    ORDER BY passed DESC
+                    JOIN concept_candidate cc ON rc.concept_id = cc.id
+                    WHERE rc.trade_date >= date('now', '-1 day')
+                    ORDER BY rc.concept_id, rc.risk_type
                 """).fetchall()
                 return [dict(r) for r in rows]
         except Exception:

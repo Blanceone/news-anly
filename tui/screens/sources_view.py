@@ -1,4 +1,8 @@
-"""Sources — 信息源采集状态 + 概念发现时间线 + 风控"""
+"""Sources — 信息源采集状态 + 风控总览
+
+Spec 6.5:
+  各Tier采集器的最后运行时间、今日采集条数、最新抓取的3条源头标题
+"""
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
@@ -32,11 +36,11 @@ class SourcesScreen(Screen):
         st.cursor_type = "row"
 
         rt = self.query_one("#risk_table", DataTable)
-        rt.add_columns("概念", "通过", "总数", "风险等级")
+        rt.add_columns("概念", "风险类型", "详情")
         rt.cursor_type = "row"
 
         et = self.query_one("#event_table", DataTable)
-        et.add_columns("时间", "类型", "重要性", "强度", "行业", "摘要")
+        et.add_columns("时间", "类型", "情绪", "概念", "摘要")
         et.cursor_type = "row"
 
     def _load_data(self):
@@ -47,7 +51,6 @@ class SourcesScreen(Screen):
         st.clear()
         source_stats = db.source_stats()
 
-        # 从 SourceMonitor 获取 Tier 定义
         try:
             from services.source_monitor import SourceMonitor
             tiers = SourceMonitor.get_all_tiers()
@@ -66,7 +69,6 @@ class SourcesScreen(Screen):
                         (stat.get("last_fetch", "") or "")[:16],
                     )
         except ImportError:
-            # Fallback: 只显示有数据的源
             for sid, stat in source_stats.items():
                 st.add_row(
                     "-", "-", stat["name"],
@@ -79,32 +81,34 @@ class SourcesScreen(Screen):
         rt = self.query_one("#risk_table", DataTable)
         rt.clear()
         for r in db.risk_summary():
-            passed = r.get("passed", 0)
-            total = r.get("total", 0)
-            risk = r.get("risk_level", "")
-            if risk == "high":
-                risk_label = "HIGH"
-            elif risk == "medium":
-                risk_label = "MED"
-            else:
-                risk_label = "LOW"
             rt.add_row(
-                r.get("concept_name", "")[:12],
-                str(passed), str(total),
-                risk_label,
+                r.get("standard_name", "")[:12],
+                r.get("risk_type", ""),
+                r.get("detail", "")[:30],
             )
 
         # 最近事件
         et = self.query_one("#event_table", DataTable)
         et.clear()
         for e in db.recent_events(30):
+            # 解析 raw_concepts
+            import json
+            raw_concepts = e.get("raw_concepts", "[]")
+            if isinstance(raw_concepts, str):
+                try:
+                    concepts_list = json.loads(raw_concepts)
+                except Exception:
+                    concepts_list = []
+            else:
+                concepts_list = raw_concepts if isinstance(raw_concepts, list) else []
+            concepts_str = ", ".join(concepts_list[:3]) if concepts_list else ""
+
             et.add_row(
                 e.get("created_at", "")[:16],
                 e.get("event_type", ""),
-                e.get("importance", ""),
-                str(e.get("event_score", 0)),
-                e.get("industry", "")[:8],
-                e.get("ai_summary", e.get("news_title", ""))[:35],
+                e.get("sentiment", ""),
+                concepts_str[:15],
+                e.get("summary", e.get("news_title", ""))[:35],
             )
 
     def action_refresh(self):

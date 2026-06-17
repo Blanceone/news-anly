@@ -1,8 +1,11 @@
-"""AI 事件识别服务
+"""AI 事件抽取与概念归一化服务
 
-从新闻中抽取结构化事件信息，为概念发现引擎提供输入。
-AI 只负责：事件分类 / 情绪分析 / 实体识别 / 行业识别 / 金额提取
-AI 禁止：推荐股票 / 买卖建议 / 预测涨跌
+严格按 V3 Final Spec 第3章 Prompt 设计:
+  3.1 事件抽取 Prompt: 从新闻中提取结构化事件 + potential_concepts
+  3.2 概念归一化 Prompt: 将离散概念映射到标准词典或标记为新概念
+
+流程 (Spec 4.2):
+  news → LLM事件抽取 → 入库event_analysis → LLM概念归一化 → 更新词典+激活候选
 """
 import json
 import re
@@ -10,137 +13,245 @@ import sqlite3
 from datetime import datetime
 
 from core.llm_client import LLMClient
+from config import Config
 
-EVENT_TYPE_DEFS = """
-事件类型（必填，选一个）：
-- ORDER 订单类：重大订单、长期订单、海外订单、中标项目、战略合作
-- EARNINGS 业绩类：业绩预增、业绩预减、业绩快报、年报、季报
-- TECHNOLOGY 技术突破：技术突破、新工艺、新产品、技术认证、专利
-- POLICY 政策催化：国家政策、地方政策、行业规范、补贴
-- MNA 并购重组：收购、兼并、资产重组、借壳
-- CAPITAL 股东行为：增持、减持、回购、股权激励
-- RISK 风险事件：处罚、诉讼、问询函、安全事故、退市风险
-- OTHER 其他：不属于以上类别的事件
 
-情绪（必填，三选一）：
-- positive 正面利好：订单、技术突破、业绩增长、政策支持
-- negative 负面利空：减持、处罚、诉讼、亏损
-- neutral 中性：日常事项、召开会议、发布公告
+# ──────────────────────────────────────────────
+# Spec 3.1: 事件抽取 Prompt
+# ──────────────────────────────────────────────
 
-重要性（必填，四选一）：
-- S 重大事件：国家级产业政策、千亿级项目、行业颠覆性技术
-- A 重大催化：重大订单、核心技术突破、超预期业绩
-- B 普通利好：一般合作、产品发布
-- C 影响较小：常规公告、日常事项
+EVENT_EXTRACTION_SYSTEM = (
+    "你是一位资深的A股财经分析师和产业研究员。你的任务是从提供的文本中精准提取结构化的事件信息，"
+    "并识别出可能引发A股市场概念炒作的产业关键词。你只返回JSON格式数据，不要任何解释。"
+)
 
-novelty_score（必填，0-100）：
-- 已反复报道=10-30，普通更新=40-60，首次披露=70-90，行业首创=90-100
-
-concept_keywords（重要）：
-- 从新闻中提取可能的"概念/题材"关键词（2-5个）
-- 例如："低空经济"、"固态电池"、"人形机器人"、"数据要素"
-- 这些关键词将用于概念发现引擎
-"""
-
-SYSTEM_PROMPT = f"""你是一名专业财经事件抽取助手。
-
-你的任务：从新闻中提取结构化事件信息。
-
-禁止：
-- 推荐股票
-- 分析买卖
-- 判断股价
-
-必须：
-- 输出标准JSON（不输出解释，不输出Markdown）
-- event_type / sentiment / importance / novelty_score / concept_keywords 为必填
-
-{EVENT_TYPE_DEFS}
-
-输出JSON格式：
+EVENT_EXTRACTION_USER = """请分析以下文本并提取事件信息：
+文本内容：{input_text}
+请严格按照以下JSON Schema返回结果：
 {{
-  "event_type": "ORDER|EARNINGS|TECHNOLOGY|POLICY|MNA|CAPITAL|RISK|OTHER",
-  "event_subtype": "具体子类别",
-  "industry": "所属行业",
-  "sub_industry": "细分行业",
-  "sentiment": "positive|negative|neutral",
-  "importance": "S|A|B|C",
-  "novelty_score": 85,
-  "entities": [{{"type": "company|stock|technology|industry", "name": "实体名称"}}],
-  "amount": 金额数字,
-  "amount_unit": "亿元|万元|元",
-  "keywords": ["关键词1", "关键词2"],
-  "concept_keywords": ["概念词1", "概念词2"],
-  "summary": "一句话总结事件",
-  "reason": "分类理由"
+  "event_type": "枚举值: 政策发布/技术突破/行业数据/公司公告/海外映射",
+  "summary": "一句话概括事件核心内容(不超过50字)",
+  "sentiment": "枚举值: 利好/利空/中性",
+  "entities": ["涉及的实体，如公司名、政府机构名、产品名"],
+  "potential_concepts": ["提取文本中可能引发炒作的原始概念词，如'低空经济'、'固态电池'、'英伟达供应链'。尽可能具体，数量1-3个。"]
 }}"""
 
-USER_PROMPT_TEMPLATE = """请分析以下财经新闻：
+# ──────────────────────────────────────────────
+# Spec 3.2: 概念归一化 Prompt
+# ──────────────────────────────────────────────
 
-标题：
-{title}
+CONCEPT_NORMALIZATION_SYSTEM = (
+    "你是一位金融NLP数据清洗专家。你的任务是将输入的离散概念关键词，与提供的标准概念词典进行语义匹配。"
+    "匹配规则：如果关键词是词典中某概念的别名或同义词，则映射到该标准概念；"
+    "如果找不到匹配项，则标记为新概念。只返回JSON格式数组。"
+)
 
-正文：
-{content}
-
-按照指定JSON格式返回结果。"""
+CONCEPT_NORMALIZATION_USER = """当前标准概念词典（standard_name: aliases）：
+{dictionary_json}
+需要归一化的原始关键词列表：
+{raw_concepts_list}
+请对每一个原始关键词进行处理，返回如下JSON数组：
+[
+  {{
+    "raw_keyword": "原始关键词",
+    "standard_concept": "匹配到的标准概念名，若无则填'UNKNOWN'",
+    "is_new": true
+  }}
+]"""
 
 
 class EventService:
-    def __init__(self, news_db=None):
-        from config import Config
+    def __init__(self, news_db=None, concept_db=None):
         self.llm = LLMClient()
         self.news_db = news_db or Config.NEWS_DB
+        self.concept_db = concept_db or Config.CONCEPT_DB
 
-    def _compute_amount_score(self, amount: float, unit: str) -> int:
-        """涉及金额评分 (0-100)"""
-        if "亿" in unit:
-            val = amount
-        elif "万" in unit:
-            val = amount / 10000
-        else:
-            val = amount / 1e8
-        if val >= 100:
-            return 100
-        elif val >= 50:
-            return 80
-        elif val >= 10:
-            return 60
-        elif val >= 1:
-            return 40
-        elif val > 0:
-            return 20
-        return 0
+    # ──────────────────────────────────────────
+    # 核心: Spec 4.2 process_news 流程
+    # ──────────────────────────────────────────
 
-    def _compute_event_score(self, importance: str, novelty: int,
-                             amount: float = 0, amount_unit: str = "") -> int:
-        """事件强度评分: 新闻级别×30% + 涉及金额×20% + 行业影响×30% + 稀缺性×20%"""
-        news_level = {"S": 100, "A": 80, "B": 60, "C": 40}.get(importance, 40)
-        amount_score = self._compute_amount_score(amount, amount_unit)
-        industry_impact = news_level
-        scarcity = novelty
-        return int(news_level * 0.30 + amount_score * 0.20 +
-                   industry_impact * 0.30 + scarcity * 0.20)
+    def process_news(self, news_text: str, news_id: str) -> dict:
+        """处理单条新闻: 事件抽取 → 入库 → 概念归一化 → 更新词典"""
+        # 1. 调用LLM进行事件抽取 (Spec 3.1)
+        user_prompt = EVENT_EXTRACTION_USER.format(input_text=news_text[:2000])
+        raw_response = self.llm.chat(EVENT_EXTRACTION_SYSTEM, user_prompt, temperature=0.1)
+        event_data = self._parse_json_object(raw_response)
 
-    def extract(self, title: str, content: str) -> dict:
-        """从新闻标题+正文中抽取事件结构"""
-        if not self.llm.available:
-            return self._fallback()
-        user_prompt = USER_PROMPT_TEMPLATE.format(title=title, content=content[:1000])
-        for attempt in range(3):
-            try:
-                raw = self.llm.chat(SYSTEM_PROMPT, user_prompt, temperature=0.1)
-                parsed = self._parse_json(raw)
-                if parsed:
-                    validated = self._validate(parsed)
-                    if validated.get("event_type") != "OTHER" or validated["novelty_score"] > 0:
-                        validated["raw_response"] = raw
-                        return validated
-            except Exception:
-                pass
-        return self._fallback()
+        if not event_data:
+            event_data = {
+                "event_type": "公司公告",
+                "summary": "",
+                "sentiment": "中性",
+                "entities": [],
+                "potential_concepts": [],
+            }
 
-    def _parse_json(self, text: str) -> dict:
+        # 2. 入库 event_analysis 表
+        event_id = self._save_event(news_id, event_data)
+        event_data["_event_id"] = event_id
+
+        # 3. 调用LLM进行概念归一化 (Spec 3.2)
+        potential_concepts = event_data.get("potential_concepts", [])
+        if potential_concepts and self.llm.available:
+            dict_json = self._get_concept_dictionary()
+            norm_prompt = CONCEPT_NORMALIZATION_USER.format(
+                dictionary_json=json.dumps(dict_json, ensure_ascii=False),
+                raw_concepts_list=json.dumps(potential_concepts, ensure_ascii=False),
+            )
+            norm_response = self.llm.chat(
+                CONCEPT_NORMALIZATION_SYSTEM, norm_prompt, temperature=0.0
+            )
+            norm_data = self._parse_json_array(norm_response)
+            # 4. 处理归一化结果：更新词典、激活概念候选池
+            if norm_data:
+                event_data["_normalized"] = self._process_normalized_concepts(
+                    norm_data, event_id
+                )
+
+        # 更新 news 表标记已处理
+        self._mark_processed(news_id, event_data)
+        return event_data
+
+    def process_news_item(self, news_item: dict) -> dict:
+        """兼容入口: 处理 news_item dict"""
+        text = f"{news_item.get('title', '')}\n{news_item.get('content', '')}"
+        result = self.process_news(text, news_item["id"])
+        return {
+            "event_type": result.get("event_type", ""),
+            "sentiment": result.get("sentiment", ""),
+            "summary": result.get("summary", ""),
+            "entities": result.get("entities", []),
+            "potential_concepts": result.get("potential_concepts", []),
+            "_event_id": result.get("_event_id"),
+        }
+
+    # ──────────────────────────────────────────
+    # 数据持久化
+    # ──────────────────────────────────────────
+
+    def _save_event(self, news_id: str, event_data: dict) -> int:
+        """写入 event_analysis 表，返回 event_id"""
+        with sqlite3.connect(self.news_db) as conn:
+            cursor = conn.execute("""
+                INSERT INTO event_analysis
+                    (news_id, event_type, entities, summary, sentiment, raw_concepts, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                news_id,
+                event_data.get("event_type", ""),
+                json.dumps(event_data.get("entities", []), ensure_ascii=False),
+                event_data.get("summary", ""),
+                event_data.get("sentiment", ""),
+                json.dumps(event_data.get("potential_concepts", []), ensure_ascii=False),
+                datetime.now().isoformat(),
+            ))
+            event_id = cursor.lastrowid
+            conn.commit()
+        return event_id
+
+    def _mark_processed(self, news_id: str, event_data: dict):
+        """更新 news 表: 标记 is_processed=1, 写入 sentiment/category"""
+        sentiment_map = {"利好": "positive", "利空": "negative", "中性": "neutral"}
+        sentiment = sentiment_map.get(event_data.get("sentiment", ""), "neutral")
+        with sqlite3.connect(self.news_db) as conn:
+            conn.execute("""
+                UPDATE news SET is_processed=1, analyzed=1, sentiment=?, category=?,
+                       ai_analysis=?, updated_at=?
+                WHERE id=?
+            """, (
+                sentiment,
+                event_data.get("event_type", ""),
+                event_data.get("summary", ""),
+                datetime.now().isoformat(),
+                news_id,
+            ))
+            conn.commit()
+
+    # ──────────────────────────────────────────
+    # 概念词典操作
+    # ──────────────────────────────────────────
+
+    def _get_concept_dictionary(self) -> list:
+        """从 concept_dictionary 表获取标准概念列表"""
+        try:
+            with sqlite3.connect(self.concept_db) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    "SELECT standard_name, aliases FROM concept_dictionary WHERE status='active'"
+                ).fetchall()
+                return [{"standard_name": r["standard_name"],
+                         "aliases": r["aliases"]} for r in rows]
+        except Exception:
+            return []
+
+    def _process_normalized_concepts(self, norm_data: list, event_id: int) -> list:
+        """处理归一化结果: 新概念加入词典, 所有概念激活候选池"""
+        results = []
+        with sqlite3.connect(self.concept_db) as conn:
+            for item in norm_data:
+                raw = item.get("raw_keyword", "").strip()
+                standard = item.get("standard_concept", "UNKNOWN").strip()
+                is_new = item.get("is_new", False)
+
+                if not raw:
+                    continue
+
+                # 新概念 → 加入词典
+                if is_new:
+                    try:
+                        conn.execute("""
+                            INSERT OR IGNORE INTO concept_dictionary
+                                (standard_name, aliases, category, status)
+                            VALUES (?, ?, 'unknown', 'active')
+                        """, (standard, json.dumps([raw], ensure_ascii=False)))
+                    except Exception:
+                        pass
+
+                # 激活概念候选池: 加入 concept_candidate
+                conn.execute("""
+                    INSERT OR IGNORE INTO concept_candidate
+                        (standard_name, status, created_at, mention_count, last_mention_date)
+                    VALUES (?, 'candidate', ?, 0, ?)
+                """, (standard, datetime.now().isoformat(),
+                      datetime.now().strftime("%Y-%m-%d")))
+
+                # 关联事件
+                concept_row = conn.execute(
+                    "SELECT id FROM concept_candidate WHERE standard_name=?",
+                    (standard,)
+                ).fetchone()
+                if concept_row:
+                    concept_id = concept_row[0]
+                    trade_date = datetime.now().strftime("%Y-%m-%d")
+                    conn.execute("""
+                        INSERT OR IGNORE INTO concept_event
+                            (concept_id, event_id, trade_date)
+                        VALUES (?, ?, ?)
+                    """, (concept_id, event_id, trade_date))
+
+                    # 递增提及计数
+                    conn.execute("""
+                        UPDATE concept_candidate
+                        SET mention_count = mention_count + 1,
+                            last_mention_date = ?
+                        WHERE id = ?
+                    """, (trade_date, concept_id))
+
+                results.append({
+                    "raw_keyword": raw,
+                    "standard_concept": standard,
+                    "is_new": is_new,
+                })
+            conn.commit()
+        return results
+
+    # ──────────────────────────────────────────
+    # JSON 解析
+    # ──────────────────────────────────────────
+
+    def _parse_json_object(self, text: str) -> dict:
+        if not text:
+            return None
         match = re.search(r'\{.*\}', text, re.DOTALL)
         if match:
             try:
@@ -149,109 +260,32 @@ class EventService:
                 pass
         return None
 
-    def _validate(self, data: dict) -> dict:
-        valid_types = {"ORDER", "EARNINGS", "TECHNOLOGY", "POLICY", "MNA", "CAPITAL", "RISK", "OTHER"}
-        valid_importance = {"S", "A", "B", "C"}
-        valid_sentiment = {"positive", "negative", "neutral"}
+    def _parse_json_array(self, text: str) -> list:
+        if not text:
+            return []
+        match = re.search(r'\[.*\]', text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
+        return []
 
-        event_type = str(data.get("event_type", "OTHER")).upper()
-        if event_type not in valid_types:
-            event_type = "OTHER"
-        importance = str(data.get("importance", "C")).upper()
-        if importance not in valid_importance:
-            importance = "C"
-        sentiment = str(data.get("sentiment", "neutral")).lower()
-        if sentiment not in valid_sentiment:
-            sentiment = "neutral"
-        novelty = int(data.get("novelty_score", 0) or 0)
-        novelty = max(0, min(100, novelty))
-        amount = float(data.get("amount", 0) or 0)
-        amount_unit = str(data.get("amount_unit", ""))
-
-        # concept_keywords: 从事件中识别可能的概念/题材名
-        concept_keywords = data.get("concept_keywords", [])
-        if not isinstance(concept_keywords, list):
-            concept_keywords = []
-        concept_keywords = [str(k).strip() for k in concept_keywords if str(k).strip()]
-
-        return {
-            "event_type": event_type,
-            "event_subtype": str(data.get("event_subtype", "")),
-            "industry": str(data.get("industry", "")),
-            "sub_industry": str(data.get("sub_industry", "")),
-            "sentiment": sentiment,
-            "importance": importance,
-            "novelty_score": novelty,
-            "event_score": self._compute_event_score(importance, novelty, amount, amount_unit),
-            "entities": data.get("entities", []),
-            "companies": data.get("companies", []),
-            "amount": amount,
-            "amount_unit": amount_unit,
-            "keywords": data.get("keywords", []),
-            "concept_keywords": concept_keywords,
-            "ai_summary": str(data.get("summary", "")),
-            "reason": str(data.get("reason", "")),
-        }
-
-    def _fallback(self) -> dict:
-        return {
-            "event_type": "OTHER", "event_subtype": "",
-            "industry": "", "sub_industry": "",
-            "sentiment": "neutral", "importance": "C",
-            "novelty_score": 0, "event_score": 0,
-            "entities": [], "companies": [],
-            "amount": 0.0, "amount_unit": "",
-            "keywords": [], "concept_keywords": [],
-            "ai_summary": "", "reason": "",
-            "raw_response": "",
-        }
-
-    def process_news_item(self, news_item: dict) -> dict:
-        """处理单条新闻: 抽取事件 → 写入 event_analysis → 更新 news"""
-        result = self.extract(news_item["title"], news_item.get("content", ""))
-        event_id = None
-        with sqlite3.connect(self.news_db) as conn:
-            conn.execute("""
-                INSERT INTO event_analysis
-                    (source_type, source_id, event_type, event_subtype,
-                     industry, sub_industry, sentiment, importance,
-                     novelty_score, event_score, entities_json, amount, amount_unit,
-                     keywords_json, ai_summary, reason, raw_response)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                "news", news_item["id"],
-                result["event_type"], result["event_subtype"],
-                result["industry"], result["sub_industry"],
-                result["sentiment"], result["importance"],
-                result["novelty_score"], result["event_score"],
-                json.dumps(result["entities"], ensure_ascii=False),
-                result["amount"], result["amount_unit"],
-                json.dumps(result["keywords"], ensure_ascii=False),
-                result["ai_summary"], result["reason"],
-                result.get("raw_response", ""),
-            ))
-            event_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-            conn.execute("""
-                UPDATE news SET sentiment=?, category=?, impact=?, ai_analysis=?, updated_at=?
-                WHERE id=?
-            """, (
-                result["sentiment"], result["event_type"],
-                result["event_score"], result["ai_summary"],
-                datetime.now().isoformat(), news_item["id"],
-            ))
-        result["_event_id"] = event_id
-        return result
+    # ──────────────────────────────────────────
+    # 查询方法
+    # ──────────────────────────────────────────
 
     def get_recent_events(self, hours=24, limit=50) -> list:
+        """获取最近事件"""
         since = (datetime.now().timestamp() - hours * 3600)
         with sqlite3.connect(self.news_db) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("""
                 SELECT e.*, n.title, n.source_name, n.created_at
                 FROM event_analysis e
-                JOIN news n ON e.source_id = n.id
+                JOIN news n ON e.news_id = n.id
                 WHERE e.created_at > datetime(?, 'unixepoch')
-                ORDER BY e.event_score DESC, e.created_at DESC
+                ORDER BY e.created_at DESC
                 LIMIT ?
             """, (since, limit)).fetchall()
             return [dict(r) for r in rows]
