@@ -41,15 +41,15 @@ class LLMClient:
         contents = []
         if system_prompt:
             contents.append({"role": "user", "parts": [{"text": system_prompt}]})
-            contents.append({"role": "model", "parts": [{"text": "好的，我明白要求了。"}]})
+            contents.append({"role": "model", "parts": [{"text": "好的，我明白了。"}]})
         contents.append({"role": "user", "parts": [{"text": user_prompt}]})
         payload = {"contents": contents, "generationConfig": {"temperature": temperature}}
         try:
             resp = requests.post(url, json=payload, timeout=60)
             data = resp.json()
             return data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-        except Exception as e:
-            return f""
+        except Exception:
+            return ""
 
     def _call_openai_compat(self, system_prompt: str, user_prompt: str, temperature: float) -> str:
         if self.provider == "deepseek":
@@ -67,5 +67,5 @@ class LLMClient:
             resp = requests.post(f"{base_url.rstrip('/')}/chat/completions", json=payload, headers=headers, timeout=60)
             data = resp.json()
             return data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        except Exception as e:
+        except Exception:
             return ""

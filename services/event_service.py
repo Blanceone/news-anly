@@ -1,6 +1,6 @@
 """AI 事件识别服务
 
-按 PRD #AI事件识别Prompt设计规范 实现的结构化事件抽取。
+从新闻中抽取结构化事件信息，为概念发现引擎提供输入。
 AI 只负责：事件分类 / 情绪分析 / 实体识别 / 行业识别 / 金额提取
 AI 禁止：推荐股票 / 买卖建议 / 预测涨跌
 """
@@ -9,9 +9,7 @@ import re
 import sqlite3
 from datetime import datetime
 
-from services.llm_client import LLMClient
-from services.theme_discovery import ThemeDiscovery
-from services.event_cluster import EventClustering
+from core.llm_client import LLMClient
 
 EVENT_TYPE_DEFS = """
 事件类型（必填，选一个）：
@@ -37,6 +35,11 @@ EVENT_TYPE_DEFS = """
 
 novelty_score（必填，0-100）：
 - 已反复报道=10-30，普通更新=40-60，首次披露=70-90，行业首创=90-100
+
+concept_keywords（重要）：
+- 从新闻中提取可能的"概念/题材"关键词（2-5个）
+- 例如："低空经济"、"固态电池"、"人形机器人"、"数据要素"
+- 这些关键词将用于概念发现引擎
 """
 
 SYSTEM_PROMPT = f"""你是一名专业财经事件抽取助手。
@@ -50,7 +53,7 @@ SYSTEM_PROMPT = f"""你是一名专业财经事件抽取助手。
 
 必须：
 - 输出标准JSON（不输出解释，不输出Markdown）
-- event_type / sentiment / importance / novelty_score 为必填
+- event_type / sentiment / importance / novelty_score / concept_keywords 为必填
 
 {EVENT_TYPE_DEFS}
 
@@ -67,6 +70,7 @@ SYSTEM_PROMPT = f"""你是一名专业财经事件抽取助手。
   "amount": 金额数字,
   "amount_unit": "亿元|万元|元",
   "keywords": ["关键词1", "关键词2"],
+  "concept_keywords": ["概念词1", "概念词2"],
   "summary": "一句话总结事件",
   "reason": "分类理由"
 }}"""
@@ -83,43 +87,13 @@ USER_PROMPT_TEMPLATE = """请分析以下财经新闻：
 
 
 class EventService:
-    def __init__(self, news_db=None, stocks_db=None):
+    def __init__(self, news_db=None):
         from config import Config
         self.llm = LLMClient()
         self.news_db = news_db or Config.NEWS_DB
-        self.stocks_db = stocks_db or Config.STOCKS_DB
-        self._init_table()
-
-    def _init_table(self):
-        with sqlite3.connect(self.news_db) as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS event_analysis (
-                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    source_type TEXT,
-                    source_id TEXT,
-                    event_type TEXT,
-                    event_subtype TEXT,
-                    industry TEXT,
-                    sub_industry TEXT,
-                    sentiment TEXT,
-                    importance TEXT,
-                    novelty_score INTEGER,
-                    event_score INTEGER,
-                    entities_json TEXT,
-                    amount REAL,
-                    amount_unit TEXT,
-                    keywords_json TEXT,
-                    ai_summary TEXT,
-                    reason TEXT,
-                    raw_response TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            conn.commit()
 
     def _compute_amount_score(self, amount: float, unit: str) -> int:
-        """PRD: 涉及金额评分 (0-100)"""
-        # 统一换算为"亿元"
+        """涉及金额评分 (0-100)"""
         if "亿" in unit:
             val = amount
         elif "万" in unit:
@@ -140,18 +114,16 @@ class EventService:
 
     def _compute_event_score(self, importance: str, novelty: int,
                              amount: float = 0, amount_unit: str = "") -> int:
-        """PRD V1 事件强度评分公式:
-        新闻级别×30% + 涉及金额×20% + 行业影响×30% + 稀缺性×20%
-        """
+        """事件强度评分: 新闻级别×30% + 涉及金额×20% + 行业影响×30% + 稀缺性×20%"""
         news_level = {"S": 100, "A": 80, "B": 60, "C": 40}.get(importance, 40)
         amount_score = self._compute_amount_score(amount, amount_unit)
-        # 行业影响: 高重要性事件通常具有广泛行业影响
         industry_impact = news_level
         scarcity = novelty
         return int(news_level * 0.30 + amount_score * 0.20 +
                    industry_impact * 0.30 + scarcity * 0.20)
 
     def extract(self, title: str, content: str) -> dict:
+        """从新闻标题+正文中抽取事件结构"""
         if not self.llm.available:
             return self._fallback()
         user_prompt = USER_PROMPT_TEMPLATE.format(title=title, content=content[:1000])
@@ -181,6 +153,7 @@ class EventService:
         valid_types = {"ORDER", "EARNINGS", "TECHNOLOGY", "POLICY", "MNA", "CAPITAL", "RISK", "OTHER"}
         valid_importance = {"S", "A", "B", "C"}
         valid_sentiment = {"positive", "negative", "neutral"}
+
         event_type = str(data.get("event_type", "OTHER")).upper()
         if event_type not in valid_types:
             event_type = "OTHER"
@@ -194,6 +167,13 @@ class EventService:
         novelty = max(0, min(100, novelty))
         amount = float(data.get("amount", 0) or 0)
         amount_unit = str(data.get("amount_unit", ""))
+
+        # concept_keywords: 从事件中识别可能的概念/题材名
+        concept_keywords = data.get("concept_keywords", [])
+        if not isinstance(concept_keywords, list):
+            concept_keywords = []
+        concept_keywords = [str(k).strip() for k in concept_keywords if str(k).strip()]
+
         return {
             "event_type": event_type,
             "event_subtype": str(data.get("event_subtype", "")),
@@ -208,6 +188,7 @@ class EventService:
             "amount": amount,
             "amount_unit": amount_unit,
             "keywords": data.get("keywords", []),
+            "concept_keywords": concept_keywords,
             "ai_summary": str(data.get("summary", "")),
             "reason": str(data.get("reason", "")),
         }
@@ -220,11 +201,13 @@ class EventService:
             "novelty_score": 0, "event_score": 0,
             "entities": [], "companies": [],
             "amount": 0.0, "amount_unit": "",
-            "keywords": [], "ai_summary": "", "reason": "",
+            "keywords": [], "concept_keywords": [],
+            "ai_summary": "", "reason": "",
             "raw_response": "",
         }
 
     def process_news_item(self, news_item: dict) -> dict:
+        """处理单条新闻: 抽取事件 → 写入 event_analysis → 更新 news"""
         result = self.extract(news_item["title"], news_item.get("content", ""))
         event_id = None
         with sqlite3.connect(self.news_db) as conn:
@@ -256,21 +239,6 @@ class EventService:
                 result["event_score"], result["ai_summary"],
                 datetime.now().isoformat(), news_item["id"],
             ))
-        # Phase 8: Theme Discovery — 从关键词中发现新概念
-        if result.get("keywords"):
-            try:
-                td = ThemeDiscovery()
-                td.discover(result["keywords"], result.get("industry", ""))
-            except Exception:
-                pass
-        # Phase 10: Event Clustering — 相似事件归簇
-        if event_id and news_item.get("title"):
-            try:
-                ec = EventClustering()
-                ec.cluster_event(event_id, news_item["title"],
-                                 news_item.get("content", ""))
-            except Exception:
-                pass
         result["_event_id"] = event_id
         return result
 

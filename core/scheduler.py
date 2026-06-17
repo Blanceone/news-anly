@@ -1,314 +1,311 @@
-import json
+"""SOP 调度器 — 三阶段标准作业程序
+
+PRD 第三章: 每日信息监测SOP
+  1. Pre-market (7:00-9:15):  采集→事件抽取→概念发现→输出题材预判
+  2. Intraday   (9:15-15:00): 增量采集→资金异动→涨停监控→触发验证→风控
+  3. Post-market(15:00-22:00): 涨停复盘→龙虎榜→北向→全量验证→评分→风控终检
+"""
 import time
 from datetime import datetime
 
-from config import Config
 from collectors import NewsCollector
-from core.analyzer import NewsAnalyzer
-from core.feishu_pusher import FeishuPusher
+from core.db_init import init_news_db, init_concept_db
 from services.event_service import EventService
-from services.stock_service import StockService
-from services.knowledge_graph import KnowledgeGraph
-from services.scoring_engine import ScoringEngine
-from services.market_verifier import MarketVerifier
+from services.concept_discovery import ConceptDiscovery
+from services.capital_detector import CapitalDetector
+from services.market_monitor import MarketMonitor
+from services.concept_validator import ConceptValidator
+from services.stock_validator import StockValidator
+from services.risk_control import RiskControl
 
 
 class NewsScheduler:
     def __init__(self):
+        init_news_db()
+        init_concept_db()
         self.collector = NewsCollector()
-        self.analyzer = NewsAnalyzer()
-        self.pusher = FeishuPusher()
-        self.event_service = EventService()
-        self.stock_service = StockService()
-        self.knowledge_graph = KnowledgeGraph()
-        self.scoring_engine = ScoringEngine()
-        self.market_verifier = MarketVerifier()
-        # V4 概念树
-        self._weekly_done = False
-        self._daily_done = False
+        self.event_svc = EventService()
+        self.concept_disc = ConceptDiscovery()
+        self.capital_det = CapitalDetector()
+        self.market_mon = MarketMonitor()
+        self.concept_val = ConceptValidator()
+        self.stock_val = StockValidator()
+        self.risk_ctrl = RiskControl()
 
-    def _tick(self) -> bool:
-        now = datetime.now()
-        print(f"\n{'='*50}")
-        print(f"[{now.strftime('%H:%M:%S')}] 开始增量采集...")
-        print(f"{'='*50}")
-
-        # V4: 首次运行时确保基本面数据就绪；概念树按7天周期刷新
-        if not self._daily_done:
-            self._refresh_fundamentals()
-            self._daily_done = True
-        if not self._weekly_done:
-            self._refresh_concept_tree()
-            self._weekly_done = True
-
-        last_fetch = self.collector.get_last_fetch_time()
-        print(f"  上次采集时间: {last_fetch.strftime('%Y-%m-%d %H:%M:%S')}")
-
-        new_news = self.collector.collect_since(last_fetch)
-        print(f"  新增 {len(new_news)} 条新闻")
-
-        # 采集后立刻分析每一条新新闻
-        analyzed_ids = []
-        for item in new_news:
-            try:
-                event = self.event_service.process_news_item(item)
-                analyzed_ids.append(item["id"])
-                event_id = event.get("_event_id")
-                if event_id:
-                    self.stock_service.process_event_stocks(event_id, event)
-                    kg_result = self.knowledge_graph.reason(
-                        event.get("keywords", []),
-                        event.get("industry", ""),
-                        companies=event.get("companies", []),
-                    )
-                    self._save_kg_result(event_id, kg_result)
-                    self.market_verifier.verify_event(
-                        event_id,
-                        event.get("industry", ""),
-                        event.get("keywords", []),
-                    )
-            except Exception as e:
-                print(f"  [分析失败] {item.get('title', '')[:30]}: {e}")
-        if analyzed_ids:
-            self.collector.mark_analyzed(analyzed_ids)
-            print(f"  已分析 {len(analyzed_ids)} 条新闻")
-        else:
-            print("  无待分析新闻")
-
-        if new_news:
-            self.pusher.push_news(new_news[:10])
-            summary = self.analyzer.summarize_news(
-                self.collector.get_recent_news(hours=24, limit=100)
-            )
-            if summary:
-                self.pusher.push_report(summary)
-
-        ranked = self.scoring_engine.calculate(hours=24)
-        if ranked:
-            self._print_ranking(ranked[:10])
-        else:
-            print("  无评分数据")
-
-        # Phase 12: 更新主题热度
-        try:
-            from services.theme_heat import ThemeHeat
-            ThemeHeat().calculate()
-        except Exception as e:
-            print(f"  [主题热度] 更新失败: {e}")
-
-        # Phase 3 (V3): 更新股票画像（仅在交易日）
-        try:
-            if datetime.today().weekday() < 5:
-                from services.stock_profile import StockProfile
-                StockProfile().calculate()
-        except Exception as e:
-            print(f"  [股票画像] 更新失败: {e}")
-
-        # V4: 概念树周更
-        if self._is_weekly_first_run():
-            self._refresh_concept_tree()
-
-        # V4: 基本面日更
-        if self._is_daily_first_run():
-            self._refresh_fundamentals()
-
-        print(f"  [完成] 本次采集")
-        return bool(new_news)
-
-    def _get_last_event_id(self):
-        import sqlite3
-        from config import Config
-        try:
-            with sqlite3.connect(Config.NEWS_DB) as conn:
-                row = conn.execute("SELECT MAX(event_id) FROM event_analysis").fetchone()
-                return row[0]
-        except Exception:
-            return None
-
-    def _save_kg_result(self, event_id: int, stocks: list):
-        if not stocks:
-            return
-        import sqlite3
-        from config import Config
-        benefit_scores = {1: 95, 2: 80, 3: 60}
-        with sqlite3.connect(Config.STOCKS_DB) as conn:
-            # 确保列存在（仅执行一次，不在循环内重复）
-            for col in ("benefit_type", "benefit_path"):
-                try:
-                    conn.execute(f"ALTER TABLE event_stock_mapping ADD COLUMN {col} TEXT")
-                except sqlite3.OperationalError:
-                    pass
-            for stock in stocks[:10]:
-                level = 1 if stock["score"] >= 85 else (2 if stock["score"] >= 60 else 3)
-                # BFS 路径数决定受益类型
-                path_count = stock.get("path_count", 1)
-                if path_count == 1:
-                    btype = "DIRECT"
-                elif path_count <= 3:
-                    btype = "INDIRECT"
-                else:
-                    btype = "SENTIMENT"
-                bpath = f"图谱推理(路径{path_count}条,最大权重{stock['score']})"
-                conn.execute("""
-                    INSERT OR IGNORE INTO event_stock_mapping
-                        (event_id, stock_code, stock_name, benefit_level, benefit_score,
-                         benefit_type, benefit_path, match_reason)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (event_id, stock["stock_code"], stock["stock_name"],
-                      level, benefit_scores.get(level, 40),
-                      btype, bpath, bpath))
-            conn.commit()
-
-    def _repair_stock_mappings(self):
-        """修补已分析但缺少股票映射的事件"""
-        import sqlite3
-        from config import Config
-        from services.theme_discovery import ThemeDiscovery
-        with sqlite3.connect(Config.STOCKS_DB) as sconn:
-            mapped = {r[0] for r in sconn.execute("SELECT DISTINCT event_id FROM event_stock_mapping").fetchall()}
-        with sqlite3.connect(Config.NEWS_DB) as nconn:
-            nconn.row_factory = sqlite3.Row
-            rows = nconn.execute("""
-                SELECT e.*, n.title, n.content
-                FROM event_analysis e
-                JOIN news n ON e.source_id = n.id
-                ORDER BY e.event_id
-            """).fetchall()
-        unmapped = [dict(r) for r in rows if r["event_id"] not in mapped]
-        if not unmapped:
-            return
-        print(f"  [修复] 发现 {len(unmapped)} 个事件缺少股票映射，正在处理...")
-        td = ThemeDiscovery()
-        for i, event in enumerate(unmapped, 1):
-            try:
-                eid = event["event_id"]
-                keywords = json.loads(event.get("keywords_json") or "[]")
-                industry = event.get("industry") or ""
-                evt_dict = {"keywords": keywords, "industry": industry}
-                self.stock_service.process_event_stocks(eid, evt_dict)
-                kg_result = self.knowledge_graph.reason(keywords, industry)
-                self._save_kg_result(eid, kg_result)
-                self.market_verifier.verify_event(eid, industry, keywords)
-                td.discover(keywords, industry)
-                if i % 20 == 0:
-                    print(f"  [修复] {i}/{len(unmapped)}")
-            except Exception as e:
-                print(f"  [修复失败] event_id={event['event_id']}: {e}")
-        self.scoring_engine.calculate(hours=72)
-        print(f"  [修复] 完成 {len(unmapped)} 个事件")
-
-    def _analyze_backlog(self):
-        """启动时检查并处理所有未分析新闻"""
-        backlog = self.collector.get_unanalyzed_news(limit=200)
-        if not backlog:
-            self._repair_stock_mappings()
-            return
-        print(f"  [启动] 发现 {len(backlog)} 条未分析新闻，开始分析...")
-        analyzed_ids = []
-        for item in backlog:
-            try:
-                event = self.event_service.process_news_item(item)
-                analyzed_ids.append(item["id"])
-                event_id = event.get("_event_id")
-                if event_id:
-                    self.stock_service.process_event_stocks(event_id, event)
-                    kg_result = self.knowledge_graph.reason(
-                        event.get("keywords", []),
-                        event.get("industry", ""),
-                        companies=event.get("companies", []),
-                    )
-                    self._save_kg_result(event_id, kg_result)
-                    self.market_verifier.verify_event(
-                        event_id,
-                        event.get("industry", ""),
-                        event.get("keywords", []),
-                    )
-            except Exception as e:
-                print(f"  [分析失败] {item.get('title', '')[:30]}: {e}")
-        if analyzed_ids:
-            self.collector.mark_analyzed(analyzed_ids)
-            self.scoring_engine.calculate(hours=72)
-            print(f"  [启动] 已完成 {len(analyzed_ids)} 条分析")
-        self._repair_stock_mappings()
-
-    def _print_ranking(self, stocks: list):
-        print(f"\n  ── TOP 推荐榜 ──")
-        print(f"  {'#':>3s} {'代码':7s} {'名称':7s} {'总分':>5s} {'事件':>5s} {'受益':>5s} {'概念':>5s} {'基本面':>5s}")
-        for s in stocks:
-            print(f"  {s['rank']:3d} {s['stock_code']:7s} {s['stock_name']:6s}  "
-                  f"{int(s['total_score']):5d}  {int(s['event_score']):5d}  {int(s['benefit_score']):5d}"
-                  f"  {int(s.get('concept_rank', 0)):5d}  {int(s.get('fundamental_score', 0)):5d}")
-        print()
-
-    # ─── V4 概念树定时刷新 ────────────────────────────
-
-    def _is_weekly_first_run(self) -> bool:
-        """每周一首次运行时返回 True"""
-        now = datetime.now()
-        if now.weekday() == 0 and not self._weekly_done:
-            self._weekly_done = True
-            return True
-        return False
-
-    def _is_daily_first_run(self) -> bool:
-        """每交易日首次运行时返回 True (16:00后)"""
-        now = datetime.now()
-        if now.weekday() < 5 and now.hour >= 16 and not self._daily_done:
-            self._daily_done = True
-            return True
-        return False
-
-    def _refresh_concept_tree(self):
-        """刷新概念树: 爬取概念列表 + 成分股 + LLM分析 + 排名"""
-        print(f"\n  [V4] 开始刷新概念树...")
-        try:
-            from services.concept_crawler import ConceptCrawler
-            from services.concept_analyzer import ConceptAnalyzer
-            from services.concept_scorer import ConceptScorer
-
-            crawler = ConceptCrawler()
-            result = crawler.refresh_all()
-            if result.get("skipped"):
-                print("  [V4] 概念树已是最新")
-                return
-
-            analyzer = ConceptAnalyzer()
-            analyzer.analyze_changed()
-
-            scorer = ConceptScorer()
-            scorer.score_all()
-
-            print("  [V4] 概念树刷新完成")
-        except Exception as e:
-            print(f"  [V4] 概念树刷新失败: {e}")
-
-    def _refresh_fundamentals(self):
-        """刷新全市场基本面数据"""
-        print(f"\n  [V4] 开始刷新基本面数据...")
-        try:
-            from services.fundamentals_service import FundamentalsService
-            fs = FundamentalsService()
-            fs.refresh_all()
-            print("  [V4] 基本面数据刷新完成")
-        except Exception as e:
-            print(f"  [V4] 基本面数据刷新失败: {e}")
+    # ──────────────────────────────────────────
+    # 主入口
+    # ──────────────────────────────────────────
 
     def run(self):
-        self._analyze_backlog()
-        self._tick()
+        """单次运行: 根据当前时间自动选择SOP阶段"""
+        phase = self._detect_phase()
+        print(f"\n{'='*50}")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+              f"SOP阶段: {phase}")
+        self._log_sop(phase, "run", "running")
+
+        if phase == "pre_market":
+            self._run_pre_market()
+        elif phase == "intraday":
+            self._run_intraday()
+        else:
+            self._run_post_market()
+
+        self._log_sop(phase, "run", "done")
+        print(f"  完成！")
+
+    def run_all(self):
+        """依次执行全部三个阶段"""
+        print(f"\n{'='*50}")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 全阶段执行")
+        self._run_pre_market()
+        self._run_intraday()
+        self._run_post_market()
+        print(f"\n  全阶段完成！")
 
     def run_loop(self, interval=None):
-        if interval is None:
-            interval = Config.FETCH_INTERVAL_SECONDS
-        self._analyze_backlog()
-        print(f"\n  [循环模式] 间隔 {interval}s，按 Ctrl+C 停止")
+        """持续循环采集"""
+        from config import Config
+        interval = interval or Config.FETCH_INTERVAL_SECONDS
+        print(f"循环模式: 每 {interval} 秒采集一次 (Ctrl+C 退出)")
         while True:
             try:
-                self._tick()
+                self.run()
+                time.sleep(interval)
             except KeyboardInterrupt:
-                print("\n  [停止] 用户中断")
+                print("\n已停止")
                 break
             except Exception as e:
-                print(f"  [错误] {e}")
-            print(f"\n  [等待] {interval} 秒后下一轮...")
-            time.sleep(interval)
+                print(f"运行异常: {e}")
+                time.sleep(interval)
+
+    # ──────────────────────────────────────────
+    # Phase 1: 盘前准备 (7:00 - 9:15)
+    # ──────────────────────────────────────────
+
+    def _run_pre_market(self):
+        """盘前: 采集新闻 → 事件抽取 → 概念发现 → 题材预判"""
+        print(f"\n  --- 盘前准备阶段 ---")
+
+        # 1. 采集新闻
+        since = self.collector.get_last_fetch_time()
+        news = self.collector.collect_since(since)
+        print(f"  采集: {len(news)} 条新闻")
+
+        # 2. AI事件抽取
+        unanalyzed = self.collector.get_unanalyzed_news()
+        if unanalyzed:
+            print(f"  分析: {len(unanalyzed)} 条未分析新闻...")
+            analyzed_ids = []
+            for item in unanalyzed:
+                try:
+                    result = self.event_svc.process_news_item(item)
+                    analyzed_ids.append(item["id"])
+                    evt_type = result.get("event_type", "OTHER")
+                    importance = result.get("importance", "C")
+                    concepts = result.get("concept_keywords", [])
+                    print(f"    [{evt_type}/{importance}] {item['title'][:40]}")
+                    if concepts:
+                        print(f"      概念: {', '.join(concepts[:5])}")
+                except Exception as e:
+                    print(f"    分析失败: {e}")
+                time.sleep(0.5)
+            self.collector.mark_analyzed(analyzed_ids)
+
+            # 3. 概念发现
+            discovered = self.concept_disc.discover_from_analyzed_news(analyzed_ids)
+            if discovered:
+                print(f"\n  概念发现: {len(discovered)} 个新概念候选")
+
+            # 4. 检查升级
+            upgrades = self.concept_disc.check_upgrades()
+            if upgrades:
+                print(f"  概念升级: {len(upgrades)} 个")
+                for u in upgrades:
+                    print(f"    [{u['status']}] {u['concept_name']} "
+                          f"(提及{u['mention_count']}次)")
+
+        # 5. 输出题材预判清单
+        self._output_predictions()
+
+    # ──────────────────────────────────────────
+    # Phase 2: 盘中验证 (9:15 - 15:00)
+    # ──────────────────────────────────────────
+
+    def _run_intraday(self):
+        """盘中: 增量采集 → 资金异动 → 涨停监控 → 验证 → 风控"""
+        print(f"\n  --- 盘中验证阶段 ---")
+
+        # 1. 增量采集
+        since = self.collector.get_last_fetch_time()
+        news = self.collector.collect_since(since)
+        if news:
+            print(f"  增量采集: {len(news)} 条")
+            unanalyzed = self.collector.get_unanalyzed_news()
+            if unanalyzed:
+                analyzed_ids = []
+                for item in unanalyzed:
+                    try:
+                        result = self.event_svc.process_news_item(item)
+                        analyzed_ids.append(item["id"])
+                    except Exception:
+                        pass
+                    time.sleep(0.3)
+                self.collector.mark_analyzed(analyzed_ids)
+                self.concept_disc.discover_from_analyzed_news(analyzed_ids)
+
+        # 2. 涨停监控
+        trade_date = datetime.now().strftime("%Y%m%d")
+        limitup_results = self.capital_det.aggregate_limitup_by_concept(trade_date)
+        if limitup_results:
+            print(f"  涨停聚合: {len(limitup_results)} 个概念有涨停")
+            for r in limitup_results:
+                if r["limitup_count"] >= 5:
+                    print(f"    [!] {r['concept_name']}: {r['limitup_count']}只涨停")
+
+        # 3. 资金异动
+        anomalies = self.capital_det.detect_anomalies()
+        if anomalies:
+            print(f"  资金异动: {len(anomalies)} 条")
+
+        # 4. 对 observing/validated 概念触发验证
+        self._trigger_validation()
+
+        # 5. 风控检查
+        self._run_risk_checks()
+
+    # ──────────────────────────────────────────
+    # Phase 3: 盘后复盘 (15:00 - 22:00)
+    # ──────────────────────────────────────────
+
+    def _run_post_market(self):
+        """盘后: 涨停复盘 → 龙虎榜 → 北向 → 全量验证 → 风控终检"""
+        print(f"\n  --- 盘后复盘阶段 ---")
+
+        # 1. 最终采集
+        since = self.collector.get_last_fetch_time()
+        news = self.collector.collect_since(since)
+        if news:
+            unanalyzed = self.collector.get_unanalyzed_news()
+            if unanalyzed:
+                analyzed_ids = []
+                for item in unanalyzed:
+                    try:
+                        self.event_svc.process_news_item(item)
+                        analyzed_ids.append(item["id"])
+                    except Exception:
+                        pass
+                    time.sleep(0.3)
+                self.collector.mark_analyzed(analyzed_ids)
+                self.concept_disc.discover_from_analyzed_news(analyzed_ids)
+                self.concept_disc.check_upgrades()
+
+        trade_date = datetime.now().strftime("%Y%m%d")
+
+        # 2. 涨停复盘
+        limitup_results = self.capital_det.aggregate_limitup_by_concept(trade_date)
+        print(f"  涨停复盘: {len(limitup_results)} 个概念")
+
+        # 3. 龙虎榜
+        dt_results = self.capital_det.fetch_dragon_tiger(trade_date)
+        print(f"  龙虎榜: {len(dt_results)} 条")
+
+        # 4. 北向资金
+        nb = self.capital_det.fetch_northbound(trade_date)
+        if nb:
+            north = nb.get("north_money", 0)
+            print(f"  北向资金: {north/100:.1f}亿")
+
+        # 5. 大盘量能
+        market = self.market_mon.assess_market(trade_date)
+        print(f"  市场评估: {market.get('summary', '')}")
+
+        # 6. 全量7信号验证
+        validations = self.concept_val.validate_all_observing()
+        if validations:
+            print(f"\n  7信号验证: {len(validations)} 个概念")
+            for v in validations:
+                print(f"    [{v['verdict']}] {v['concept_id']}: "
+                      f"{v['signal_count']}/7 信号 → {v['action']}")
+
+        # 7. 风控终检
+        self._run_risk_checks()
+        risk_summary = self.risk_ctrl.get_risk_summary()
+        if risk_summary:
+            print(f"\n  风控总览: {len(risk_summary)} 个概念")
+            for r in risk_summary:
+                print(f"    [{r['risk_level']}] {r['concept_name']}: "
+                      f"{r['passed']}/{r['total']} 通过")
+
+    # ──────────────────────────────────────────
+    # 辅助方法
+    # ──────────────────────────────────────────
+
+    def _detect_phase(self) -> str:
+        """根据当前时间判断SOP阶段"""
+        now = datetime.now()
+        t = now.hour * 100 + now.minute
+        if t < 925:
+            return "pre_market"
+        elif t < 1500:
+            return "intraday"
+        else:
+            return "post_market"
+
+    def _output_predictions(self):
+        """输出题材预判清单"""
+        concepts = self.concept_disc.get_concepts(status="observing", limit=5)
+        if not concepts:
+            concepts = self.concept_disc.get_concepts(limit=5)
+        if concepts:
+            print(f"\n  === 题材预判清单 (Top {len(concepts)}) ===")
+            for i, c in enumerate(concepts, 1):
+                print(f"    {i}. [{c['status']}/{c['lifecycle']}] "
+                      f"{c['concept_name']} "
+                      f"(提及{c['mention_count']}次, {c['mention_days']}天)")
+
+    def _trigger_validation(self):
+        """对符合条件的概念触发验证"""
+        concepts = self.concept_disc.get_concepts(status="observing", limit=10)
+        validated = self.concept_disc.get_concepts(status="validated", limit=10)
+        all_concepts = concepts + validated
+        if all_concepts:
+            for c in all_concepts[:5]:  # 最多验证5个
+                try:
+                    result = self.concept_val.validate(c["concept_id"])
+                    print(f"    [{result['verdict']}] {c['concept_name']}: "
+                          f"{result['signal_count']}/7 → {result['action']}")
+                except Exception as e:
+                    print(f"    验证异常: {e}")
+
+    def _run_risk_checks(self):
+        """对 validated 概念执行风控检查"""
+        concepts = self.concept_disc.get_concepts(status="validated", limit=10)
+        for c in concepts:
+            try:
+                result = self.risk_ctrl.check_all(c["concept_id"])
+                if not result["is_safe"]:
+                    print(f"    [风控] {c['concept_name']}: {result['risk_level']} "
+                          f"- {result['summary']}")
+            except Exception:
+                pass
+
+    def _log_sop(self, phase: str, task_name: str, status: str):
+        """记录SOP执行日志"""
+        import sqlite3
+        from config import Config
+        try:
+            with sqlite3.connect(Config.CONCEPT_DB) as conn:
+                if status == "running":
+                    conn.execute("""
+                        INSERT INTO sop_log (phase, task_name, status)
+                        VALUES (?, ?, ?)
+                    """, (phase, task_name, status))
+                else:
+                    conn.execute("""
+                        UPDATE sop_log SET status=?, finished_at=?
+                        WHERE phase=? AND task_name=? AND status='running'
+                    """, (status, datetime.now().isoformat(), phase, task_name))
+                conn.commit()
+        except Exception:
+            pass

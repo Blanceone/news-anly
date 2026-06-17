@@ -1,7 +1,11 @@
-"""双数据库初始化 — news.db + stocks.db"""
+"""双数据库初始化 — news.db + concept.db"""
 import sqlite3
 from config import Config
 
+
+# ─────────────────────────────────────────────
+# news.db: 新闻 + 事件分析 (保留)
+# ─────────────────────────────────────────────
 
 def init_news_db():
     with sqlite3.connect(Config.NEWS_DB) as conn:
@@ -25,10 +29,10 @@ def init_news_db():
                 updated_at TIMESTAMP
             )
         """)
-        for col in ("freshness", "analyzed"):
+        for col, ddl in (("freshness", "ALTER TABLE news ADD COLUMN freshness TEXT"),
+                         ("analyzed", "ALTER TABLE news ADD COLUMN analyzed INTEGER DEFAULT 0")):
             try:
-                conn.execute(f"ALTER TABLE news ADD COLUMN {col} TEXT" if col == "freshness"
-                             else f"ALTER TABLE news ADD COLUMN {col} INTEGER DEFAULT 0")
+                conn.execute(ddl)
             except sqlite3.OperationalError:
                 pass
         conn.execute("""
@@ -64,394 +68,259 @@ def init_news_db():
             )
         """)
         conn.commit()
-
-        # 清理 cninfo 旧数据：公告日期当作 created_at 导致的 T00:00:00 / 未来日期
         _repair_cninfo_timestamps(conn)
 
 
-def init_stocks_db():
-    with sqlite3.connect(Config.STOCKS_DB) as conn:
+# ─────────────────────────────────────────────
+# concept.db: 概念发现与验证系统 (12张表)
+# ─────────────────────────────────────────────
+
+def init_concept_db():
+    with sqlite3.connect(Config.CONCEPT_DB) as conn:
+
+        # ── 域A: 概念发现 (3表) ──────────────────────────────
+
+        # A1. 概念候选池
+        # status: candidate(候选) / observing(观察) / validated(已验证) / rejected(已拒绝)
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS stock_basic (
-                stock_code TEXT PRIMARY KEY,
-                stock_name TEXT NOT NULL,
-                industry TEXT,
-                market_value REAL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS theme_stock_mapping (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                theme_key TEXT NOT NULL,
-                theme_name TEXT NOT NULL,
-                stock_code TEXT NOT NULL,
-                stock_name TEXT NOT NULL,
-                benefit_level INTEGER,
-                benefit_reason TEXT,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS event_stock_mapping (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                event_id INTEGER NOT NULL,
-                stock_code TEXT NOT NULL,
-                stock_name TEXT NOT NULL,
-                benefit_level INTEGER,
-                benefit_score INTEGER,
-                benefit_type TEXT DEFAULT 'DIRECT',
-                benefit_path TEXT,
-                match_reason TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        for col in ("benefit_type", "benefit_path"):
-            try:
-                conn.execute(f"ALTER TABLE event_stock_mapping ADD COLUMN {col} TEXT")
-            except sqlite3.OperationalError:
-                pass
-        # 确保唯一约束防止重复映射
-        try:
-            # 先清理已存在的重复记录（保留 id 最小的那条）
-            conn.execute("""
-                DELETE FROM event_stock_mapping WHERE id NOT IN (
-                    SELECT MIN(id) FROM event_stock_mapping
-                    GROUP BY event_id, stock_code
-                )
-            """)
-        except sqlite3.OperationalError:
-            pass
-        try:
-            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_esm_event_stock ON event_stock_mapping(event_id, stock_code)")
-        except (sqlite3.OperationalError, sqlite3.IntegrityError):
-            pass
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS market_confirmation (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                event_id INTEGER NOT NULL,
-                board_name TEXT,
-                sector_change REAL,
-                volume_amount REAL,
-                up_count INTEGER,
-                down_count INTEGER,
-                confirmation_score INTEGER,
-                calculated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS stock_score (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                stock_code TEXT NOT NULL,
-                stock_name TEXT NOT NULL,
-                score_date TEXT NOT NULL,
-                event_score REAL DEFAULT 0,
-                benefit_score REAL DEFAULT 0,
-                market_score REAL DEFAULT 0,
-                financial_score REAL DEFAULT 0,
-                technical_score REAL DEFAULT 0,
-                capital_score REAL DEFAULT 0,
-                total_score REAL DEFAULT 0,
-                event_count INTEGER DEFAULT 0,
-                top_events TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS recommendation_result (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                stock_code TEXT NOT NULL,
-                stock_name TEXT NOT NULL,
-                strategy_type TEXT NOT NULL,
-                rank_no INTEGER,
-                score REAL,
-                recommendation_reason TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS sector_cache (
-                name TEXT PRIMARY KEY,
-                change REAL,
-                up INTEGER,
-                down INTEGER,
-                volume REAL,
-                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS kg_entity (
-                entity_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                entity_type TEXT NOT NULL,
-                name TEXT NOT NULL,
-                description TEXT,
-                UNIQUE(entity_type, name)
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS kg_relation (
-                relation_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                source_type TEXT NOT NULL,
-                source_name TEXT NOT NULL,
-                target_type TEXT NOT NULL,
-                target_name TEXT NOT NULL,
-                relation_type TEXT NOT NULL,
-                weight REAL DEFAULT 0,
-                UNIQUE(source_type, source_name, target_type, target_name, relation_type)
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS kg_direct_benefit (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                source_type TEXT NOT NULL,
-                source_name TEXT NOT NULL,
-                stock_code TEXT NOT NULL,
-                weight REAL NOT NULL,
-                reason TEXT,
-                UNIQUE(source_type, source_name, stock_code)
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS theme_candidate (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                theme_name TEXT NOT NULL UNIQUE,
+            CREATE TABLE IF NOT EXISTS concept_candidate (
+                concept_id TEXT PRIMARY KEY,
+                concept_name TEXT NOT NULL,
+                concept_type TEXT DEFAULT 'unknown',
+                status TEXT DEFAULT 'candidate',
                 first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 mention_count INTEGER DEFAULT 1,
-                heat_score REAL DEFAULT 0,
-                status TEXT DEFAULT 'candidate'
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS theme_embedding (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                theme_name TEXT NOT NULL UNIQUE,
-                description TEXT,
-                embedding BLOB
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS event_cluster (
-                cluster_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                main_event_id INTEGER,
-                event_count INTEGER DEFAULT 1,
-                first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                heat_score REAL DEFAULT 0,
-                birth_time TIMESTAMP,
-                peak_time TIMESTAMP,
-                decline_time TIMESTAMP,
-                status TEXT DEFAULT 'BIRTH'
-            )
-        """)
-        for col in ("birth_time", "peak_time", "decline_time", "status"):
-            try:
-                conn.execute(f"ALTER TABLE event_cluster ADD COLUMN {col} TEXT")
-            except sqlite3.OperationalError:
-                pass
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS event_cluster_map (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                cluster_id INTEGER NOT NULL,
-                event_id INTEGER NOT NULL UNIQUE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS theme_heat (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                theme_name TEXT NOT NULL,
-                heat_score REAL DEFAULT 0,
-                decay_heat REAL DEFAULT 0,
-                mention_count INTEGER DEFAULT 0,
-                board_change REAL DEFAULT 0,
-                board_volume REAL DEFAULT 0,
-                last_active_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        # Fix TEXT→REAL for decay_heat (early version used TEXT)
-        try:
-            col_info = conn.execute("PRAGMA table_info(theme_heat)").fetchall()
-            dhtype = next((r[2] for r in col_info if r[1] == "decay_heat"), "")
-            if dhtype and dhtype.upper() == "TEXT":
-                conn.execute("DROP TABLE IF EXISTS theme_heat_tmp")
-                conn.execute("CREATE TABLE theme_heat_tmp AS SELECT * FROM theme_heat")
-                conn.execute("DROP TABLE theme_heat")
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS theme_heat (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        theme_name TEXT NOT NULL,
-                        heat_score REAL DEFAULT 0,
-                        decay_heat REAL DEFAULT 0,
-                        mention_count INTEGER DEFAULT 0,
-                        board_change REAL DEFAULT 0,
-                        board_volume REAL DEFAULT 0,
-                        last_active_time TEXT,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-                conn.execute("INSERT OR IGNORE INTO theme_heat(theme_name,heat_score,decay_heat,mention_count,board_change,board_volume,last_active_time) SELECT theme_name,heat_score,CAST(decay_heat AS REAL),mention_count,board_change,board_volume,last_active_time FROM theme_heat_tmp")
-                conn.execute("DROP TABLE theme_heat_tmp")
-        except Exception:
-            pass
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS stock_profile (
-                stock_code TEXT PRIMARY KEY,
-                stock_name TEXT NOT NULL,
-                market_cap REAL DEFAULT 0,
-                turnover_rate REAL DEFAULT 0,
-                theme_count INTEGER DEFAULT 0,
+                mention_days INTEGER DEFAULT 1,
+                source_events TEXT DEFAULT '',
+                keywords TEXT DEFAULT '',
                 industry TEXT DEFAULT '',
-                volatility REAL DEFAULT 0,
-                limitup_history INTEGER DEFAULT 0,
-                leader_score REAL DEFAULT 0,
+                verdict TEXT DEFAULT '',
+                signal_count INTEGER DEFAULT 0,
+                lifecycle TEXT DEFAULT 'BIRTH',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # A2. 概念→股票映射
+        # role: leader(龙头) / member(跟风) / upstream(上游) / downstream(下游)
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS theme_limitup_stats (
+            CREATE TABLE IF NOT EXISTS concept_stock (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                theme_name TEXT NOT NULL,
-                trade_date TEXT NOT NULL,
-                limitup_count INTEGER DEFAULT 0,
-                consecutive_count INTEGER DEFAULT 0,
-                broken_count INTEGER DEFAULT 0,
-                UNIQUE(theme_name, trade_date)
+                concept_id TEXT NOT NULL,
+                stock_code TEXT NOT NULL,
+                stock_name TEXT NOT NULL,
+                role TEXT DEFAULT 'member',
+                benefit_path TEXT DEFAULT '',
+                match_source TEXT DEFAULT 'keyword',
+                is_core INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(concept_id, stock_code)
             )
         """)
+
+        # A3. 概念→事件关联
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS backtest_result (
+            CREATE TABLE IF NOT EXISTS concept_event (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                strategy_type TEXT,
-                start_date TEXT,
-                end_date TEXT,
-                holding_days INTEGER,
-                win_rate REAL,
-                avg_return REAL,
-                max_drawdown REAL,
-                sharpe_ratio REAL,
-                excess_return REAL,
-                total_trades INTEGER,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                concept_id TEXT NOT NULL,
+                event_id INTEGER NOT NULL,
+                news_id TEXT,
+                event_type TEXT,
+                event_score INTEGER DEFAULT 0,
+                news_title TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(concept_id, event_id)
             )
         """)
+
+        # ── 域B: 7信号验证 (1表) ──────────────────────────────
+
+        # signal_no:
+        #   1=源头事件可查(必须)  2=3日净流入递增  3=涨停>=5只
+        #   4=竞价抢筹>=3000万    5=上下游扩散    6=媒体热度拐点
+        #   7=研报覆盖
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS backtest_trades (
+            CREATE TABLE IF NOT EXISTS concept_validation (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                backtest_id INTEGER,
-                trade_date TEXT,
+                concept_id TEXT NOT NULL,
+                signal_no INTEGER NOT NULL,
+                signal_name TEXT NOT NULL,
+                is_met INTEGER DEFAULT 0,
+                evidence TEXT DEFAULT '',
+                score REAL DEFAULT 0,
+                checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(concept_id, signal_no, checked_at)
+            )
+        """)
+
+        # ── 域C: 资金与市场 (4表) ─────────────────────────────
+
+        # C1. 资金异动
+        # anomaly_type: volume_breakout / auction_rush / dragon_tiger / northbound
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS capital_anomaly (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                anomaly_type TEXT NOT NULL,
                 stock_code TEXT,
                 stock_name TEXT,
-                buy_price REAL,
-                sell_price REAL,
-                holding_days INTEGER,
-                return_rate REAL,
-                strategy_type TEXT
+                concept_id TEXT,
+                amount REAL DEFAULT 0,
+                detail TEXT DEFAULT '',
+                trade_date TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # ─── V4 概念树系统 ───
+
+        # C2. 涨停统计 (按概念聚合)
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS concept_board (
-                concept_id TEXT PRIMARY KEY,
-                concept_name TEXT NOT NULL,
-                concept_type TEXT DEFAULT 'concept',
-                stock_count INTEGER DEFAULT 0,
-                board_change REAL DEFAULT 0,
-                board_volume REAL DEFAULT 0,
-                up_count INTEGER DEFAULT 0,
-                down_count INTEGER DEFAULT 0,
-                keywords TEXT DEFAULT '',
-                description TEXT DEFAULT '',
-                status TEXT DEFAULT 'active',
-                crawled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS concept_stock_member (
+            CREATE TABLE IF NOT EXISTS limitup_stats (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 concept_id TEXT NOT NULL,
                 concept_name TEXT NOT NULL,
+                trade_date TEXT NOT NULL,
+                limitup_count INTEGER DEFAULT 0,
+                consecutive_max INTEGER DEFAULT 0,
+                broken_count INTEGER DEFAULT 0,
+                leader_stock TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(concept_id, trade_date)
+            )
+        """)
+
+        # C3. 龙虎榜
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS dragon_tiger (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_date TEXT NOT NULL,
                 stock_code TEXT NOT NULL,
                 stock_name TEXT NOT NULL,
-                is_core INTEGER DEFAULT 0,
-                crawled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(concept_id, stock_code)
+                reason TEXT DEFAULT '',
+                buy_amount REAL DEFAULT 0,
+                sell_amount REAL DEFAULT 0,
+                net_amount REAL DEFAULT 0,
+                buyer_name TEXT DEFAULT '',
+                seller_name TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # C4. 北向资金日度
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS stock_fundamentals (
-                stock_code TEXT PRIMARY KEY,
+            CREATE TABLE IF NOT EXISTS northbound_flow (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_date TEXT NOT NULL UNIQUE,
+                north_money REAL DEFAULT 0,
+                south_money REAL DEFAULT 0,
+                ggt_ss REAL DEFAULT 0,
+                ggt_sz REAL DEFAULT 0,
+                hgt REAL DEFAULT 0,
+                sgt REAL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # ── 域D: 风控与决策 (4表) ─────────────────────────────
+
+        # D1. 个股3步验证
+        # step: business(业务关联) / announcement(公告) / research(研报)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS stock_validation (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                concept_id TEXT NOT NULL,
+                stock_code TEXT NOT NULL,
                 stock_name TEXT NOT NULL,
-                industry TEXT DEFAULT '',
-                pe_ttm REAL DEFAULT 0,
-                pb REAL DEFAULT 0,
-                total_mv REAL DEFAULT 0,
-                circ_mv REAL DEFAULT 0,
-                turnover_rate REAL DEFAULT 0,
-                close_price REAL DEFAULT 0,
-                pct_chg REAL DEFAULT 0,
-                company_business TEXT DEFAULT '',
-                roe REAL DEFAULT 0,
-                gross_margin REAL DEFAULT 0,
-                revenue_yoy REAL DEFAULT 0,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                step TEXT NOT NULL,
+                is_passed INTEGER DEFAULT 0,
+                evidence TEXT DEFAULT '',
+                exclude_reason TEXT DEFAULT '',
+                checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(concept_id, stock_code, step)
             )
         """)
+
+        # D2. 风控检查
+        # check_type: chase_high(追高) / event_support(事件支撑) / volume(量能) / stop_loss(止损)
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS concept_stock_analysis (
+            CREATE TABLE IF NOT EXISTS risk_check (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                concept_id TEXT NOT NULL,
+                check_type TEXT NOT NULL,
+                is_passed INTEGER DEFAULT 0,
+                detail TEXT DEFAULT '',
+                market_volume REAL DEFAULT 0,
+                checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(concept_id, check_type, checked_at)
+            )
+        """)
+
+        # D3. 综合评分
+        # verdict: main_concept(主线概念,>=5信号) / uncertain(存疑,4信号) / one_day_wonder(一日游,<=3信号)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS concept_score (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 concept_id TEXT NOT NULL,
                 concept_name TEXT NOT NULL,
-                stock_code TEXT NOT NULL,
-                stock_name TEXT NOT NULL,
-                relevance_ratio REAL DEFAULT 0,
-                chain_position TEXT DEFAULT '',
-                importance_level TEXT DEFAULT 'C',
-                is_real_capability INTEGER DEFAULT 0,
-                analysis_reason TEXT DEFAULT '',
-                llm_model TEXT DEFAULT '',
-                analyzed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(concept_id, stock_code)
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS concept_stock_score (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                concept_id TEXT NOT NULL,
-                concept_name TEXT NOT NULL,
-                stock_code TEXT NOT NULL,
-                stock_name TEXT NOT NULL,
-                relevance_score REAL DEFAULT 0,
-                valuation_score REAL DEFAULT 0,
-                quality_score REAL DEFAULT 0,
-                capability_score REAL DEFAULT 0,
-                chain_score REAL DEFAULT 0,
+                signal_count INTEGER DEFAULT 0,
                 total_score REAL DEFAULT 0,
-                rank_in_concept INTEGER DEFAULT 0,
+                verdict TEXT DEFAULT '',
+                action TEXT DEFAULT '',
+                risk_level TEXT DEFAULT '',
                 scored_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(concept_id, stock_code)
+                UNIQUE(concept_id, scored_at)
             )
         """)
-        # 概念表索引
+
+        # D4. SOP执行日志
+        # phase: pre_market / intraday / post_market
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sop_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                phase TEXT NOT NULL,
+                task_name TEXT NOT NULL,
+                status TEXT DEFAULT 'running',
+                detail TEXT DEFAULT '',
+                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                finished_at TIMESTAMP
+            )
+        """)
+
+        # ── 索引 ──────────────────────────────────────────────
         for idx_sql in (
-            "CREATE INDEX IF NOT EXISTS idx_cb_name ON concept_board(concept_name)",
-            "CREATE INDEX IF NOT EXISTS idx_csm_concept ON concept_stock_member(concept_id)",
-            "CREATE INDEX IF NOT EXISTS idx_csm_stock ON concept_stock_member(stock_code)",
-            "CREATE INDEX IF NOT EXISTS idx_sf_industry ON stock_fundamentals(industry)",
-            "CREATE INDEX IF NOT EXISTS idx_sf_mv ON stock_fundamentals(total_mv DESC)",
-            "CREATE INDEX IF NOT EXISTS idx_csa_concept ON concept_stock_analysis(concept_id)",
-            "CREATE INDEX IF NOT EXISTS idx_csa_stock ON concept_stock_analysis(stock_code)",
-            "CREATE INDEX IF NOT EXISTS idx_css_concept ON concept_stock_score(concept_id)",
-            "CREATE INDEX IF NOT EXISTS idx_css_rank ON concept_stock_score(concept_id, rank_in_concept)",
+            "CREATE INDEX IF NOT EXISTS idx_cc_status ON concept_candidate(status)",
+            "CREATE INDEX IF NOT EXISTS idx_cc_lifecycle ON concept_candidate(lifecycle)",
+            "CREATE INDEX IF NOT EXISTS idx_cs_concept ON concept_stock(concept_id)",
+            "CREATE INDEX IF NOT EXISTS idx_cs_stock ON concept_stock(stock_code)",
+            "CREATE INDEX IF NOT EXISTS idx_ce_concept ON concept_event(concept_id)",
+            "CREATE INDEX IF NOT EXISTS idx_ce_event ON concept_event(event_id)",
+            "CREATE INDEX IF NOT EXISTS idx_cv_concept ON concept_validation(concept_id)",
+            "CREATE INDEX IF NOT EXISTS idx_cv_signal ON concept_validation(signal_no)",
+            "CREATE INDEX IF NOT EXISTS idx_ca_type ON capital_anomaly(anomaly_type)",
+            "CREATE INDEX IF NOT EXISTS idx_ca_concept ON capital_anomaly(concept_id)",
+            "CREATE INDEX IF NOT EXISTS idx_ls_concept ON limitup_stats(concept_id)",
+            "CREATE INDEX IF NOT EXISTS idx_ls_date ON limitup_stats(trade_date)",
+            "CREATE INDEX IF NOT EXISTS idx_dt_date ON dragon_tiger(trade_date)",
+            "CREATE INDEX IF NOT EXISTS idx_dt_stock ON dragon_tiger(stock_code)",
+            "CREATE INDEX IF NOT EXISTS idx_nf_date ON northbound_flow(trade_date)",
+            "CREATE INDEX IF NOT EXISTS idx_sv_concept ON stock_validation(concept_id)",
+            "CREATE INDEX IF NOT EXISTS idx_sv_stock ON stock_validation(stock_code)",
+            "CREATE INDEX IF NOT EXISTS idx_rc_concept ON risk_check(concept_id)",
+            "CREATE INDEX IF NOT EXISTS idx_csc_concept ON concept_score(concept_id)",
+            "CREATE INDEX IF NOT EXISTS idx_csc_verdict ON concept_score(verdict)",
+            "CREATE INDEX IF NOT EXISTS idx_sl_phase ON sop_log(phase)",
         ):
             try:
                 conn.execute(idx_sql)
             except sqlite3.OperationalError:
                 pass
+
         conn.commit()
 
+
+# ─────────────────────────────────────────────
+# 辅助: 修复 cninfo 时间戳
+# ─────────────────────────────────────────────
 
 def _repair_cninfo_timestamps(conn):
     """修复 cninfo 旧数据：公告日期当作 created_at 导致的 T00:00:00 时间戳"""

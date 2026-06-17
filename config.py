@@ -16,24 +16,15 @@ class Config:
     # Tushare
     TUSHARE_TOKEN = os.getenv("TUSHARE_TOKEN", "")
 
-    # Feishu
-    FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL", "")
-
-    # Stock Watchlist
-    STOCK_WATCHLIST = [s.strip() for s in os.getenv("STOCK_WATCHLIST", "").split(",") if s.strip()]
-
     # Data retention (hours)
     DATA_RETENTION_HOURS = int(os.getenv("DATA_RETENTION_HOURS", "72"))
 
     # Fetch interval (seconds) — used in loop mode
     FETCH_INTERVAL_SECONDS = int(os.getenv("FETCH_INTERVAL_SECONDS", "5"))
 
-    # Run mode: pre_market / intraday / post_market / all
-    RUN_MODE = os.getenv("RUN_MODE", "all")
-
     # Database paths
     NEWS_DB = "news.db"
-    STOCKS_DB = "stocks.db"
+    CONCEPT_DB = "concept.db"
 
     # Data sources config
     NEWS_SOURCES = {
@@ -75,7 +66,7 @@ class Config:
         },
     }
 
-    # Sell/buy timing for news impact
+    # News impact categories
     NEWS_CATEGORIES = {
         "宏观经济": ["GDP", "CPI", "PMI", "降息", "降准", "加息", "央", "货币", "财政", "通胀", "通缩", "出口", "进口", "贸易"],
         "政策利好": ["利好", "支持", "扶持", "补贴", "减税", "降费", "放宽", "鼓励", "推动", "促进"],

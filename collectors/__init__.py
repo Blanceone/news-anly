@@ -17,16 +17,14 @@ _HANDLERS = {
 
 
 class NewsCollector:
-    def __init__(self, news_db=None, stocks_db=None):
+    def __init__(self, news_db=None):
         from config import Config
         self.news_db = news_db or Config.NEWS_DB
-        self.stocks_db = stocks_db or Config.STOCKS_DB
         self._init_db()
 
     def _init_db(self):
-        from core.db_init import init_news_db, init_stocks_db
+        from core.db_init import init_news_db
         init_news_db()
-        init_stocks_db()
 
     def get_last_fetch_time(self) -> datetime:
         with sqlite3.connect(self.news_db) as conn:
@@ -133,15 +131,4 @@ class NewsCollector:
             rows = conn.execute("""
                 SELECT * FROM news WHERE created_at > ? ORDER BY created_at DESC LIMIT ?
             """, (since, limit)).fetchall()
-            return [dict(row) for row in rows]
-
-    def get_news_by_stock(self, stock_code: str, hours=72, limit=30) -> list:
-        since = (datetime.now() - timedelta(hours=hours)).isoformat()
-        with sqlite3.connect(self.news_db) as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute("""
-                SELECT * FROM news WHERE created_at > ?
-                AND (title LIKE ? OR content LIKE ?)
-                ORDER BY created_at DESC LIMIT ?
-            """, (since, f"%{stock_code}%", f"%{stock_code}%", limit)).fetchall()
             return [dict(row) for row in rows]

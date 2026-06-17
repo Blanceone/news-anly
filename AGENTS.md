@@ -1,4 +1,4 @@
-# A股情报系统 — Agent Guide
+# A股概念发现系统 — Agent Guide
 
 ## Secrets / API Keys
 
@@ -16,25 +16,27 @@ All tokens and API keys are stored in `C:\Users\13979\Desktop\notes\apis.txt`. A
 ```bash
 pip install -r requirements.txt
 cp .env.example .env        # then edit with keys
-python main.py run           # 单次增量采集+分析+推送
+python main.py run           # 单次增量采集+分析+概念发现
 python main.py run --loop    # 持续循环采集（默认5秒间隔）
 python main.py run --loop -i 30  # 自定义间隔（秒）
 python main.py init          # check config
 python main.py tui           # TUI终端
+python -m pytest tests/      # 运行测试
 ```
 
 ## Architecture
 
-Single Python app, orchestrated by `scheduler.py`. New business services in `services/`.
+Single Python app, orchestrated by `scheduler.py`. 核心流程: 新闻采集 → AI事件抽取 → 概念发现 → 7信号验证 → 风控决策。
 
 ```
-collectors/ (fetch) → services/event_service.py (AI事件抽取) → services/stock_service.py (股票关联+受益链分层)
-                    ↘ SQLite (news.db + event_analysis + stock_mapping)
-                    ↗ services/knowledge_graph.py (知识图谱推理+BFS)
-                    ↗ services/scoring_engine.py (评分V3→推荐榜HOT/THEME/LATENT)
-                    ↗ services/theme_heat.py (主题热度+衰减+涨停)
-                    ↗ services/event_cluster.py (事件聚类+生命周期)
-                    ↗ services/stock_profile.py (龙头评分)
+collectors/ (fetch) → services/event_service.py (AI事件抽取) → services/concept_discovery.py (概念发现+升级)
+                    ↘ SQLite (news.db: news + event_analysis)
+                    ↗ services/capital_detector.py (涨停/龙虎榜/北向/资金异动)
+                    ↗ services/market_monitor.py (大盘量能/板块/情绪)
+                    ↗ services/concept_validator.py (7信号验证)
+                    ↗ services/stock_validator.py (个股3步验证)
+                    ↗ services/risk_control.py (风控红线)
+                    ↗ services/source_monitor.py (信息源Tier 1-6)
 ```
 
 Entrypoint: `main.py` parses `{run, init, tui}`.
@@ -44,159 +46,155 @@ Entrypoint: `main.py` parses `{run, init, tui}`.
 ```
 news-anly/
 ├── main.py                 # CLI entrypoint (run / init / tui)
-├── tui/                    # Textual TUI 终端
-│   ├── app.py              # Main app: top-bar nav (1-6), clock, bindings
+├── tui/                    # Textual TUI 终端 (5页签)
+│   ├── app.py              # Main app: top-bar nav (1-5), bindings
 │   ├── db.py               # DB query layer for TUI screens
 │   ├── screens/
-│   │   ├── dashboard.py    # Dashboard: 统计栏 + 新闻流 + 推荐榜 + 题材
-│   │   ├── theme_view.py   # Theme View: 三栏 (行业板块/概念主题/成分股)
-│   │   ├── stock_view.py   # Stock View: 评分排序 → 事件/主题详情
-│   │   ├── event_view.py   # Event View: 事件列表 → 影响股票 + 来源新闻
-│   │   ├── discovery_view.py # Discovery: 新概念候选 + 晋升official
-│   │   └── cluster_view.py # Cluster: 事件聚类视图
-│   └── widgets/            # (reserved for shared widgets)
-├── config.py               # All config: sources, categories, API keys, retention
+│   │   ├── dashboard.py    # 1: SOP阶段 + 概念验证摘要 + 风控 + 量能
+│   │   ├── concepts_view.py# 2: 概念候选池 (状态/生命周期/信号/verdict)
+│   │   ├── validation_view.py # 3: 7信号验证 + 概念评分 + 个股3步验证
+│   │   ├── capital_view.py # 4: 资金异动 + 涨停 + 龙虎榜 + 北向
+│   │   └── sources_view.py # 5: 信息源状态 + 风控总览 + 事件
+│   └── widgets/
+├── config.py               # All config: sources, API keys, retention
 ├── collectors/             # Data source handlers
 │   ├── __init__.py         # NewsCollector: pipeline + DB (freshness, analyzed flag)
 │   ├── cls.py              # 财联社 - sign-based JSON API, accepts since param
-│   └── cninfo.py           # 巨潮资讯 - POST form announcements, accepts since param
-├── services/               # 业务服务层 (15 modules)
+│   └── cninfo.py           # 巨潮资讯 - POST form announcement, accepts since param
+├── services/               # 业务服务层 (8 modules)
 │   ├── __init__.py
+│   ├── event_service.py    # AI事件识别（结构化JSON输出, concept_keywords提取）
+│   ├── concept_discovery.py# 概念发现引擎（candidate→observing→validated）
+│   ├── concept_validator.py# 7信号验证（>=5主线, 4存疑, <=3一日游）
+│   ├── stock_validator.py  # 个股3步验证（业务关联/公告/研报）
+│   ├── capital_detector.py # 资金异动（涨停/龙虎榜/北向/竞价）
+│   ├── market_monitor.py   # 市场监控（大盘量能/板块/情绪）
+│   ├── source_monitor.py   # 信息源监控（Tier 1-6）
+│   └── risk_control.py     # 风控引擎（追高/事件支撑/量能/止损）
+├── core/                   # 核心模块
 │   ├── llm_client.py       # 统一 LLM 调用客户端
-│   ├── event_service.py    # AI事件识别（结构化JSON输出）
-│   ├── stock_service.py    # 股票关联映射（关键词→DIRECT, Embedding→INDIRECT, KG→SENTIMENT）
-│   ├── knowledge_graph.py  # 知识图谱（47实体+82关系+BFS推理）
-│   ├── scoring_engine.py   # 评分系统V3（7维公式→HOT/THEME/LATENT策略）
-│   ├── market_verifier.py  # 市场验证引擎（Tushare行情→MarketScore）
-│   ├── theme_heat.py       # 主题热度（新闻40%+板块20%+涨停15%+衰减半衰期3天）
-│   ├── theme_discovery.py  # 新概念自动发现（candidate→observing→official三级）
-│   ├── embedding_service.py# TF-IDF语义匹配（char_wb ngram, cosine阈值0.3）
-│   ├── event_cluster.py    # 事件聚类+生命周期（BIRTH→GROWING→PEAK→DECLINING→DEAD）
-│   ├── stock_profile.py    # 股票画像+龙头评分（流动性/活跃度/题材数/涨停历史）
-│   ├── limitup_stats.py    # 涨停热度（涨停/连板/炸板按主题聚合）
-│   └── backtest.py         # 回测系统（持仓1/3/5/10/20天, 胜率/夏普/回撤）
-├── core/                   # Business logic
-│   ├── analyzer.py         # LLM analysis + mark-as-analyzed
-│   ├── db_init.py          # 双数据库初始化 (news.db + stocks.db 18张表)
-│   ├── scheduler.py        # Single run() flow: fetch → analyze → push
-│   └── feishu_pusher.py    # Feishu card message push
+│   ├── db_init.py          # 双数据库初始化 (news.db 3表 + concept.db 12表)
+│   └── scheduler.py        # SOP三阶段调度: 盘前/盘中/盘后
+├── tests/                  # 测试
+│   ├── test_concept_discovery.py
+│   ├── test_concept_validator.py
+│   ├── test_capital_detector.py
+│   └── test_risk_control.py
+├── prd/                    # 产品需求文档
 ├── docs/                   # 架构文档
-│   └── 架构说明.md
-├── PLAN_V3.md              # V3 开发计划
-└── .github/workflows/      # (仅存根)
+├── .env                    # 环境变量 (gitignored)
+└── requirements.txt
 ```
 
 ## Config
 
 All config lives in `config.py` + `.env` loaded via `python-dotenv`.
 
-- **AI providers** (probed in order): Gemini > DeepSeek > OpenAI-compat. Fallback = keyword classification only.
+- **AI providers** (probed in order): Gemini > DeepSeek > OpenAI-compat.
 - **DATA_RETENTION_HOURS** (default 72): old data auto-deleted on each run.
 - **NEWS_SOURCES**: dict in `config.py`. Each entry has source-specific URL/params.
-- **NEWS_CATEGORIES**: substring keyword matching dict.
-- **TUSHARE_TOKEN** in `.env`: Sectors + daily quotes + limitup data
+- **TUSHARE_TOKEN** in `.env`: 涨停/龙虎榜/北向/板块数据
 - `.env` is gitignored.
 
 ## Data Sources — Known State
 
 | Source | Type | Status | Detail |
 |--------|------|--------|--------|
-| cls (财联社) | JSON API | ✅ incremental | Sign: SHA1→MD5 of sorted params. `last_time` set to `since` timestamp. Client-side ctime filter. |
-| cninfo (巨潮资讯) | POST form | ✅ incremental + pagination | Sorted by `annDate desc`, client-side time filter with multi-page pull. |
-
-Adding a new data source requires:
-1. Entry in `config.py` `NEWS_SOURCES` dict
-2. New source file with `collect(config, since=None) -> list[dict]`
-3. Register module in `collectors/__init__.py` `_HANDLERS` dict
+| cls (财联社) | JSON API | ✅ incremental | Sign: SHA1→MD5 of sorted params. |
+| cninfo (巨潮资讯) | POST form | ✅ incremental + pagination | Sorted by `annDate desc`. |
 
 ## SQLite Schema
 
-Auto-created `news.db` with tables:
+### news.db (3表)
 - `news(id TEXT PK, title, content, summary, source, source_name, url, category, sentiment, impact, related_stocks, ai_analysis, freshness TEXT DEFAULT 'medium', analyzed INTEGER DEFAULT 0, created_at, updated_at)`
-- `reports(id INTEGER PK, type, title, content, created_at)` (保留, 未使用)
-- `event_analysis(id INTEGER PK, news_id TEXT FK, title, content, event_type, event_keywords, industry_tags, sentiment, impact_level, involved_stocks, summary, analysis_time)`
+- `reports(id INTEGER PK, type, title, content, created_at)` (保留)
+- `event_analysis(event_id INTEGER PK, source_type, source_id, event_type, event_subtype, industry, sub_industry, sentiment, importance, novelty_score, event_score, entities_json, amount, amount_unit, keywords_json, ai_summary, reason, raw_response, created_at)`
 
-`stocks.db` 包含以下 18 张表:
-- `stock_basic` — 全市场股票代码/名称/行业
-- `theme_stock_mapping` — 主题→受益股映射
-- `event_stock_mapping` — 事件→股票关联 (含 benefit_type/benefit_path)
-- `market_confirmation` — 板块行情验证（市场验证引擎）
-- `stock_score` — 单因子评分存储
-- `recommendation_result` — 推荐结果 (strategy_type区分HOT/THEME/LATENT)
-- `sector_cache` — 板块缓存
-- `kg_entity` / `kg_relation` / `kg_direct_benefit` — 知识图谱（47实体/82关系/42直连受益）
-- `theme_candidate` — 新概念候选区（candidate→observing→official）
-- `theme_embedding` — TF-IDF embedding 缓存
-- `event_cluster` / `event_cluster_map` — 事件聚类（含生命周期字段）
-- `theme_heat` — 主题热度（含衰减后heat/最后活跃时间）
-- `stock_profile` — 股票画像（换手率/市值/题材数/涨停历史/龙头评分）
-- `theme_limitup_stats` — 涨停热度（涨停数/连板数/炸板数/行业/概念）
-- `backtest_result` / `backtest_trades` — 回测结果
+### concept.db (12表, 4域)
+
+**域A: 概念发现 (3表)**
+- `concept_candidate` — 概念候选池 (status: candidate/observing/validated/rejected, lifecycle: BIRTH/GROWING/PEAK/DECLINING/DEAD)
+- `concept_stock` — 概念→股票映射 (role: leader/member/upstream/downstream)
+- `concept_event` — 概念→事件关联
+
+**域B: 7信号验证 (1表)**
+- `concept_validation` — 7信号 (signal_no 1-7, is_met, evidence, score)
+
+**域C: 资金与市场 (4表)**
+- `capital_anomaly` — 资金异动 (volume_breakout/auction_rush/dragon_tiger/northbound)
+- `limitup_stats` — 涨停统计 (按概念聚合)
+- `dragon_tiger` — 龙虎榜
+- `northbound_flow` — 北向资金日度
+
+**域D: 风控与决策 (4表)**
+- `stock_validation` — 个股3步验证 (business/announcement/research)
+- `risk_check` — 风控检查 (追高/事件支撑/量能/止损)
+- `concept_score` — 综合评分 (verdict: main_concept/uncertain/one_day_wonder)
+- `sop_log` — SOP执行日志
+
+## SOP 三阶段调度
+
+| 阶段 | 时间 | 动作 |
+|------|------|------|
+| Pre-market | 7:00-9:15 | 采集→事件抽取→概念发现→输出题材预判 |
+| Intraday | 9:15-15:00 | 增量采集→资金异动→涨停监控→触发验证→风控 |
+| Post-market | 15:00-22:00 | 涨停复盘→龙虎榜→北向→全量验证→评分→风控终检 |
+
+## 7信号验证清单
+
+| # | 信号 | 达标条件 |
+|---|------|----------|
+| 1 | 源头事件可查 | **必须满足** |
+| 2 | 3日净流入递增 | 连续3日有资金异动 |
+| 3 | 涨停>=5只 | 概念涨停数>=5 |
+| 4 | 竞价抢筹>=3000万 | 龙头股竞价验证 |
+| 5 | 上下游扩散 | >=2种角色, >=5只股票 |
+| 6 | 媒体热度拐点 | >=5次提及 或 >=3天连续 |
+| 7 | 研报覆盖 | 龙虎榜/研报>=2条 |
+
+- **>=5信号 → main_concept (participate)**
+- **4信号 → uncertain (observe)**
+- **<=3信号 → one_day_wonder (avoid)**
+
+## 概念生命周期
+
+| 阶段 | 系数 | 条件 |
+|------|------|------|
+| BIRTH | - | 首次发现 |
+| GROWING | - | mention>=3, days>=2 → observing |
+| PEAK | - | mention>=5 → validated |
+| DECLINING | - | 72h无新增 |
+| DEAD | - | 7天无新增 |
+
+## TUI Terminal
+
+启动: `python main.py tui`
+
+| 按键 | 页签 | 内容 |
+|------|------|------|
+| 1 | Dashboard | SOP阶段 + 概念验证摘要 + 风控状态 + 大盘量能 |
+| 2 | Concepts | 概念候选池 (状态/生命周期/信号数/verdict) |
+| 3 | Validation | 7信号验证详情 + 概念评分 + 个股3步验证 |
+| 4 | Capital | 资金异动 + 涨停统计 + 龙虎榜 + 北向 |
+| 5 | Sources | 信息源采集状态 + 风控总览 + 事件时间线 |
+| r | 刷新 | 手动刷新当前页面 |
+| q | 退出 | |
 
 ## Freshness
 - **high**: `created_at` within 1 hour
 - **medium**: 1–24 hours
 - **low**: >24 hours
-- Updated automatically on every `collect_since()` call.
 
 ## Analysis Flag
 - `analyzed = 0`: not yet analyzed by AI
-- `analyzed = 1`: AI analysis written to DB (category, sentiment, impact, etc.)
-- On each `run()`, fetches unanalyzed items, runs AI, marks as analyzed.
+- `analyzed = 1`: AI analysis written to DB
 - Prevents re-analysis across restarts.
-
-## TUI Terminal
-
-启动: `python main.py tui` 或 `python -m tui.app`
-
-| 按键 | 功能 |
-|------|------|
-| 1 | Dashboard（新闻流+推荐榜+题材） |
-| 2 | Theme View（三栏：行业板块/概念主题/成分股） |
-| 3 | Stock View（评分排序→事件详情） |
-| 4 | Event View（事件列表→影响股票） |
-| 5 | Discovery（新概念候选列表） |
-| 6 | Clusters（事件聚类视图） |
-| r | 手动刷新当前页面 |
-| q | 退出 |
-
-- Dashboard 10秒自动刷新，其余页面30秒自动刷新
-
-## 评分公式 (V3)
-
-```
-Total = EventScore×15% + BenefitScore(分层)×20% + MarketScore×15%
-      + ThemeHeat(衰减)×15% + ClusterHeat(生命周期)×10%
-      + LeaderScore×15% + LifecycleScore×10%
-```
-
-### 受益链分层
-
-| 类型 | 权重 | 来源 |
-|------|------|------|
-| DIRECT | 1.0 | 关键词匹配 / theme_stock level=1 / KG 1跳 |
-| INDIRECT | 0.8 | Embedding匹配 / KG 2-3跳 |
-| SENTIMENT | 0.5 | KG 3跳+ / 题材跟风 |
-
-### 生命周期
-
-| 阶段 | 系数 | 条件 |
-|------|------|------|
-| BIRTH | 0.8 | 首次出现 < 24h |
-| GROWING | 1.0 | event_count ≥ 3 |
-| PEAK | 0.7 | event_count ≥ 10 |
-| DECLINING | 0.3 | 超24h无新增 |
-| DEAD | 0.0 | 超72h无新增 |
 
 ## Noteworthy
 
-- Feishu card messages are interactive JSON, sent via webhook POST. No Feishu SDK.
-- Data older than 72 hours is auto-deleted on each run (`DATA_RETENTION_HOURS`).
-- MarketVerifier only runs during trading hours (weekdays 9:25-15:00), otherwise returns score 0.
-- Scoring formula V3: 7维, 多策略输出 (HOT/THEME/LATENT).
-- cls `collect()` passes `since` as `last_time` API param — only gets items after that time.
-- cninfo `collect()` paginates up to 5 pages, stops when items are older than `since`.
-- TUSHARE_TOKEN: 配置在 `.env` 中，从 https://tushare.pro 获取
-- Knowledge Graph: 47 entities, 82 relations, 42 direct benefits, BFS non-weighted + COMPETITOR skipped.
-- Database separation: news.db (lightweight) + stocks.db (18 tables for analysis results).
-- `event_stock_mapping` receives results from both StockService (keyword/embedding) and KG (BFS).
+- Data older than 72 hours is auto-deleted on each run.
+- concept.db is separate from news.db.
+- MarketMonitor only meaningful during trading hours (weekdays 9:25-15:00).
+- CapitalDetector requires TUSHARE_TOKEN for real data.
+- SourceMonitor: Tier 1-4 are framework placeholders, Tier 2 (cninfo) + Tier 5 (cls) are active.
+- RiskControl: chase_high check uses concept lifecycle, stop_loss is always a reminder.
