@@ -64,14 +64,96 @@ class NewsScheduler:
         print(f"\n  全阶段完成！")
 
     def run_loop(self, interval=None):
-        """持续循环采集"""
+        """持续循环: 每5秒采集新闻并触发全业务流程 (Ctrl+C 退出)"""
         from config import Config
         interval = interval or Config.FETCH_INTERVAL_SECONDS
-        print(f"循环模式: 每 {interval} 秒采集一次 (Ctrl+C 退出)")
+        print(f"循环模式: 每 {interval} 秒触发全业务流程 (Ctrl+C 退出)")
+
+        # 资金/市场数据的最小拉取间隔 (AKShare频率保护)
+        CAPITAL_INTERVAL = 300  # 5分钟
+        last_capital_fetch = 0
+
         while True:
             try:
-                self.run()
+                now = datetime.now()
+                print(f"\n{'='*50}")
+                print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] 全业务流程")
+                trade_date = now.strftime("%Y-%m-%d")
+                trade_date_short = now.strftime("%Y%m%d")
+
+                # 1. 采集新闻
+                since = self.collector.get_last_fetch_time()
+                news = self.collector.collect_since(since)
+                new_count = len(news) if news else 0
+                print(f"  [1/6] 采集: {new_count} 条新新闻")
+
+                # 2. AI事件抽取 + 概念归一化
+                unanalyzed = self.collector.get_unanalyzed_news()
+                if unanalyzed:
+                    print(f"  [2/6] 事件抽取: {len(unanalyzed)} 条")
+                    analyzed_ids = []
+                    for item in unanalyzed:
+                        try:
+                            result = self.event_svc.process_news_item(item)
+                            analyzed_ids.append(item["id"])
+                            concepts = result.get("potential_concepts", [])
+                            if concepts:
+                                print(f"    [{result.get('event_type','')}] "
+                                      f"{item['title'][:35]} => {', '.join(concepts[:3])}")
+                        except Exception as e:
+                            print(f"    失败: {e}")
+                        time.sleep(0.3)
+                    self.collector.mark_analyzed(analyzed_ids)
+                else:
+                    print(f"  [2/6] 事件抽取: 无新新闻")
+
+                # 3. 概念升级检查
+                upgrades = self.concept_disc.check_upgrades()
+                if upgrades:
+                    print(f"  [3/6] 概念升级: {len(upgrades)} 个")
+                    for u in upgrades:
+                        print(f"    [{u['new_status']}] {u['standard_name']}")
+                else:
+                    print(f"  [3/6] 概念升级: 无")
+
+                # 4. 涨停/资金数据 (5分钟一次, 保护AKShare频率)
+                elapsed = time.time() - last_capital_fetch
+                if elapsed >= CAPITAL_INTERVAL:
+                    print(f"  [4/6] 资金数据: 拉取涨停/龙虎榜/北向")
+                    try:
+                        self.capital_det.aggregate_limitup_by_concept(trade_date_short)
+                    except Exception:
+                        pass
+                    try:
+                        self.capital_det.get_dragon_tiger(trade_date_short)
+                    except Exception:
+                        pass
+                    try:
+                        self.capital_det.get_northbound_flow(trade_date_short)
+                    except Exception:
+                        pass
+                    last_capital_fetch = time.time()
+                else:
+                    remain = int(CAPITAL_INTERVAL - elapsed)
+                    print(f"  [4/6] 资金数据: 跳过 (下次{remain}s后)")
+
+                # 5. 7信号验证 (对所有observing/validated概念)
+                self._trigger_validation(trade_date)
+
+                # 6. 风控扫描
+                try:
+                    concepts = self.concept_disc.get_concepts(status="observing", limit=10)
+                    validated = self.concept_disc.get_concepts(status="validated", limit=10)
+                    for c in (concepts + validated)[:5]:
+                        self.risk_ctrl.check_all(c["id"], trade_date)
+                except Exception:
+                    pass
+
+                # 记录SOP日志
+                self._log_sop("loop", "full_pipeline", "done")
+
                 time.sleep(interval)
+
             except KeyboardInterrupt:
                 print("\n已停止")
                 break
