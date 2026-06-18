@@ -196,8 +196,9 @@ class EventService:
                 if not raw:
                     continue
 
-                # 新概念 → 加入词典
+                # 新概念: 用 raw_keyword 作为 standard_name
                 if is_new:
+                    standard = raw  # 新概念的标准名就是原始关键词
                     try:
                         conn.execute("""
                             INSERT OR IGNORE INTO concept_dictionary
